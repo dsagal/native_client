@@ -179,53 +179,76 @@ void test_directory_walk() {
   passed("test_directory_walk", "all");
 }
 
-void test_new_directory_access() {
+void test_new_directory_access(bool read_only) {
   // Create a new directory, removes that directory.
   mode_t mode = S_IRUSR | S_IWUSR | S_IXUSR;
-  ASSERT_EQ(mkdir("/test_dir", mode), 0);
-  ASSERT_EQ(rmdir("/test_dir"), 0);
+  if (read_only) {
+    ASSERT_EQ(mkdir("/test_dir", mode), -1);
+    ASSERT_EQ(errno, EACCES);
+    ASSERT_EQ(rmdir("/test_dir"), -1);
+    ASSERT_EQ(errno, EACCES);
+  } else {
+    ASSERT_EQ(mkdir("/test_dir", mode), 0);
+    ASSERT_EQ(rmdir("/test_dir"), 0);
+  }
 
-  ASSERT_EQ(mkdir("/test_dir/", mode), 0);
-  ASSERT_EQ(rmdir("/test_dir/"), 0);
+  if (!read_only) {
+    ASSERT_EQ(mkdir("/test_dir/", mode), 0);
+    ASSERT_EQ(rmdir("/test_dir/"), 0);
 
-  // Test that relative paths can also be used.
-  ASSERT_EQ(mkdir("test_dir", mode), 0);
-  ASSERT_EQ(rmdir("test_dir"), 0);
+    // Test that relative paths can also be used.
+    ASSERT_EQ(mkdir("test_dir", mode), 0);
+    ASSERT_EQ(rmdir("test_dir"), 0);
 
-  // Test that directory contents cannot be accessed by relative path if the cwd
-  // is no longer valid.
-  ASSERT_EQ(mkdir("sub_dir", mode), 0);
-  ASSERT_EQ(chdir("sub_dir"), 0);
-  ASSERT_EQ(rmdir("../sub_dir"), 0);
-  ASSERT_EQ(open("xxx", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR), -1);
-  ASSERT_EQ(errno, ENOENT);
-  ASSERT_EQ(chdir("/"), 0);
+    // Test that directory contents cannot be accessed by relative path if the cwd
+    // is no longer valid.
+    ASSERT_EQ(mkdir("sub_dir", mode), 0);
+    ASSERT_EQ(chdir("sub_dir"), 0);
+    ASSERT_EQ(rmdir("../sub_dir"), 0);
+    ASSERT_EQ(open("xxx", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR), -1);
+    ASSERT_EQ(errno, ENOENT);
+    ASSERT_EQ(chdir("/"), 0);
+  }
 
   char file_name[PATH_MAX];
   snprintf(file_name, PATH_MAX, "%s/test_dir", g_temp_sub_dir_path);
-  ASSERT_EQ(mkdir(file_name, mode), 0);
-  ASSERT_EQ(rmdir(file_name), 0);
+  if (read_only) {
+    ASSERT_EQ(mkdir(file_name, mode), -1);
+    ASSERT_EQ(errno, EACCES);
+    ASSERT_EQ(rmdir(file_name), -1);
+    ASSERT_EQ(errno, EACCES);
+  } else {
+    ASSERT_EQ(mkdir(file_name, mode), 0);
+    ASSERT_EQ(rmdir(file_name), 0);
+  }
 
   ASSERT_NE(mkdir("/this_dir_does_not_exist/sub_dir", mode), 0);
   passed("test_new_directory_access", "all");
 }
 
-void test_link_access() {
+void test_link_access(bool read_only) {
   // Tests that we can create hard links within mounted directory.
 
   // Tests we can make hard link to a temporary file in the root directory.
-  ASSERT_EQ(link(g_temp_file_path, "/temp_file_hard_link"), 0);
-  ASSERT_EQ(unlink("/temp_file_hard_link"), 0);
+  if (read_only) {
+    ASSERT_EQ(link(g_temp_file_path, "/temp_file_hard_link"), -1);
+    ASSERT_EQ(errno, EACCES);
+    ASSERT_EQ(unlink("/temp_file_hard_link"), -1);
+    ASSERT_EQ(errno, EACCES);
+  } else {
+    ASSERT_EQ(link(g_temp_file_path, "/temp_file_hard_link"), 0);
+    ASSERT_EQ(unlink("/temp_file_hard_link"), 0);
 
-  char link_name[PATH_MAX];
-  // Tests we can make hard link to a temporary file in a subdirectory.
-  snprintf(link_name, PATH_MAX, "%s/temp_file_hard_link", g_temp_sub_dir_path);
-  ASSERT_EQ(link(g_temp_file_path, link_name), 0);
-  ASSERT_EQ(unlink(link_name), 0);
+    char link_name[PATH_MAX];
+    // Tests we can make hard link to a temporary file in a subdirectory.
+    snprintf(link_name, PATH_MAX, "%s/temp_file_hard_link", g_temp_sub_dir_path);
+    ASSERT_EQ(link(g_temp_file_path, link_name), 0);
+    ASSERT_EQ(unlink(link_name), 0);
+  }
   passed("test_link_access", "all");
 }
 
-void test_symlink_access() {
+void test_symlink_access(bool read_only) {
   // Tests that symlink and readlink access are disabled.
   char symlink_name[] = "temp_file_symlink";
   char link_dest[PATH_MAX];
@@ -233,25 +256,45 @@ void test_symlink_access() {
   // Symlink is disabled
   ASSERT_EQ(symlink(g_temp_file_path, symlink_name), -1);
   ASSERT_EQ(errno, EACCES);
-  // Readlink is disabled
-  ASSERT_EQ(readlink(g_temp_symlink_path, link_dest, sizeof link_dest), -1);
-  ASSERT_EQ(errno, EACCES);
-  // Cannot open symlinks (even if they already exist)
-  ASSERT_EQ(open(g_temp_symlink_path, O_RDONLY), -1);
-  ASSERT_EQ(errno, EACCES);
+  if (read_only) {
+    // Readlink is enabled with -R and -L options (which is what we test when read_only is true).
+    // The expected value is the basename of g_temp_file_path.
+    const char *slash = strrchr(g_temp_file_path, '/');
+    const char *expected = slash ? slash + 1 : g_temp_file_path;
+
+    int n = readlink(g_temp_symlink_path, link_dest, sizeof link_dest);
+    ASSERT_EQ(int(strlen(expected)), n);
+    ASSERT_EQ(strncmp(expected, link_dest, strlen(expected)), 0);
+    // We can also open symlinks in this case.
+    ASSERT_MSG(open(g_temp_symlink_path, O_RDONLY) >= 0, "open() of symlink failed");
+  } else {
+    // Readlink is disabled
+    ASSERT_EQ(readlink(g_temp_symlink_path, link_dest, sizeof link_dest), -1);
+    ASSERT_EQ(errno, EACCES);
+    // Cannot open symlinks (even if they already exist)
+    ASSERT_EQ(open(g_temp_symlink_path, O_RDONLY), -1);
+    ASSERT_EQ(errno, EACCES);
+  }
 
   passed("test_symlink_access", "all");
 }
 
-void test_rename_access() {
+void test_rename_access(bool read_only) {
   // Demonstrates that files can be renamed within the mounted directory.
   char new_file_location[PATH_MAX];
   snprintf(new_file_location, PATH_MAX, "/%s/temp_file_new",
            g_temp_sub_dir_name);
-  ASSERT_EQ(rename(g_temp_file_path, new_file_location), 0);
-  ASSERT_EQ(rename(new_file_location, g_temp_file_path), 0);
-  // Check that the file is in our final location.
-  do_test_write_read_file(g_temp_file_path, false);
+  if (read_only) {
+    ASSERT_EQ(rename(g_temp_file_path, new_file_location), -1);
+    ASSERT_EQ(errno, EACCES);
+    ASSERT_EQ(rename(new_file_location, g_temp_file_path), -1);
+    ASSERT_EQ(errno, EACCES);
+  } else {
+    ASSERT_EQ(rename(g_temp_file_path, new_file_location), 0);
+    ASSERT_EQ(rename(new_file_location, g_temp_file_path), 0);
+    // Check that the file is in our final location.
+    do_test_write_read_file(g_temp_file_path, false);
+  }
 
   // Demonstrates that symlinks cannot be renamed within the mounted directory.
   ASSERT_EQ(rename(g_temp_symlink_path, new_file_location), -1);
@@ -260,7 +303,7 @@ void test_rename_access() {
   passed("test_rename_access", "all");
 }
 
-void test_escape_attempt() {
+void test_escape_attempt(bool read_only) {
   // Try to escape the directory -- should not be able to do so.
 
   // Attempting to leave the root directory via ".." places the cwd at the root
@@ -274,12 +317,12 @@ void test_escape_attempt() {
   // Cannot open files outside root.
   snprintf(inaccessible_path, PATH_MAX, "../%s", g_temp_inaccessible_file_name);
   ASSERT_EQ(open(inaccessible_path, O_RDWR, S_IRUSR | S_IWUSR), -1);
-  ASSERT_EQ(errno, ENOENT);
+  ASSERT_EQ(errno, read_only ? EACCES : ENOENT);
 
   snprintf(inaccessible_path, PATH_MAX, "/../%s",
            g_temp_inaccessible_file_name);
   ASSERT_EQ(open(inaccessible_path, O_RDWR, S_IRUSR | S_IWUSR), -1);
-  ASSERT_EQ(errno, ENOENT);
+  ASSERT_EQ(errno, read_only ? EACCES : ENOENT);
 
   // Cannot open directories outside root.
   struct stat buf;
@@ -436,23 +479,58 @@ void test_new_file_access() {
   passed("test_new_file_access", "all");
 }
 
+
+void test_readonly_file_access() {
+  // Show that reads and writes to valid files work.
+  char file_name[PATH_MAX];
+  ASSERT_EQ_MSG(chdir("/"), 0, "chdir() failed");
+
+  // Absolute path
+  snprintf(file_name, PATH_MAX, "%s", g_temp_file_path);
+
+  ASSERT_EQ(open(file_name, O_RDWR, 0), -1);
+  ASSERT_EQ(errno, EACCES);
+
+  ASSERT_EQ(open(file_name, O_RDONLY | O_TRUNC, 0), -1);
+  ASSERT_EQ(errno, EACCES);
+
+  ASSERT_EQ(open(file_name, O_RDONLY | O_CREAT, S_IRUSR | S_IWUSR), -1);
+  ASSERT_EQ(errno, EACCES);
+
+  int fd = open(file_name, O_RDONLY, 0);
+  ASSERT_MSG(fd >= 0, "open() failed\n");
+
+  char test_string[6] = "abcde";
+  int test_string_len = 5;
+  char buf[5];
+  ASSERT_EQ(-1, write(fd, test_string, test_string_len));
+  ASSERT_EQ(errno, EBADF);
+
+  ASSERT_EQ(0, read(fd, buf, sizeof(buf)));
+  ASSERT_EQ(0, close(fd));
+}
+
 /*
  * function testSuite()
  *
  *   Run through a complete sequence of file tests.
  */
 
-void testSuite() {
+void testSuite(bool read_only) {
   test_directory_walk();
-  test_new_directory_access();
-  test_link_access();
-  test_symlink_access();
-  test_rename_access();
-  test_escape_attempt();
+  test_new_directory_access(read_only);
+  test_link_access(read_only);
+  test_symlink_access(read_only);
+  test_rename_access(read_only);
+  test_escape_attempt(read_only);
   test_information_leak();
   test_parent_directory_access();
-  test_valid_file_access();
-  test_new_file_access();
+  if (read_only) {
+    test_readonly_file_access();
+  } else {
+    test_valid_file_access();
+    test_new_file_access();
+  }
 }
 
 }  // anonymous namespace
@@ -462,7 +540,14 @@ void testSuite() {
  *
  * run all tests and call system exit with appropriate value.
  */
-int main(const int argc, const char *argv[]) {
+int main(int argc, const char *argv[]) {
+  bool readOnly = false;
+  if (!strcmp(argv[1], "-R")) {
+    readOnly = true;
+    argv++;
+    argc--;
+  }
+
   if (argc != 8) {
     printf("Unexpected arguments\n");
     exit(-1);
@@ -488,7 +573,7 @@ int main(const int argc, const char *argv[]) {
   snprintf(g_temp_inaccessible_file_name, PATH_MAX, "%s", argv[7]);
 
   // Run the full test suite.
-  testSuite();
+  testSuite(readOnly);
   printf("All tests PASSED\n");
   exit(0);
 }

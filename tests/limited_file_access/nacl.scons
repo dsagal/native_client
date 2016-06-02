@@ -24,29 +24,29 @@ env = env.Clone()
 # | inaccessibleDir (INACCESSIBLE)
 # | inaccessibleFile (INACCESSIBLE)
 
-temp_dir_path = env.MakeTempDir(prefix='temp_dir')
-temp_file_path = env.MakeEmptyFile(prefix='temp_file', dir=temp_dir_path)
-temp_symlink_path = os.path.join(temp_dir_path, 'temp_symlink')
-os.symlink(temp_file_path, temp_symlink_path)
-temp_sub_dir_path = env.MakeTempDir(prefix='temp_sub_dir', dir=temp_dir_path)
-temp_sub_dir_file_path = env.MakeEmptyFile(prefix='temp_sub_file',
-                                           dir=temp_sub_dir_path)
-inaccessible_dir_path = env.MakeTempDir(prefix='temp_inaccessible_dir')
-inaccessible_file_path = env.MakeEmptyFile(prefix='temp_inaccessible_file')
+def make_temp_files():
+  temp_dir_path = env.MakeTempDir(prefix='temp_dir')
+  temp_file_path = env.MakeEmptyFile(prefix='temp_file', dir=temp_dir_path)
+  temp_symlink_path = os.path.join(temp_dir_path, 'temp_symlink')
+  os.symlink(os.path.basename(temp_file_path), temp_symlink_path)
+  temp_sub_dir_path = env.MakeTempDir(prefix='temp_sub_dir', dir=temp_dir_path)
+  temp_sub_dir_file_path = env.MakeEmptyFile(prefix='temp_sub_file',
+                                             dir=temp_sub_dir_path)
+  inaccessible_dir_path = env.MakeTempDir(prefix='temp_inaccessible_dir')
+  inaccessible_file_path = env.MakeEmptyFile(prefix='temp_inaccessible_file')
 
-temp_directory_files = [temp_dir_path, temp_file_path, temp_symlink_path,
-                        temp_sub_dir_path, temp_sub_dir_file_path,
-                        inaccessible_dir_path, inaccessible_file_path]
-
-# Only grab the suffix of the file path
-temp_directory_files = [os.path.basename(f) for f in temp_directory_files]
-mounted_directory = temp_dir_path
+  temp_directory_files = [temp_dir_path, temp_file_path, temp_symlink_path,
+                          temp_sub_dir_path, temp_sub_dir_file_path,
+                          inaccessible_dir_path, inaccessible_file_path]
+  # Only grab the suffix of the file path
+  return (temp_dir_path, [os.path.basename(f) for f in temp_directory_files])
 
 limited_file_access_nexe = env.ComponentProgram('limited_file_access',
                                                 'limited_file_access.cc',
                                                 EXTRA_LIBS=['${PTHREAD_LIBS}',
                                                             '${NONIRT_LIBS}'])
 
+mounted_directory, temp_directory_files = make_temp_files()
 node = env.CommandSelLdrTestNacl(
     'limited_file_access_test.out',
     limited_file_access_nexe,
@@ -54,3 +54,12 @@ node = env.CommandSelLdrTestNacl(
     sel_ldr_flags=['-m', mounted_directory])
 
 env.AddNodeToTestSuite(node, ['small_tests'], 'run_limited_file_access_test')
+
+mounted_directory, temp_directory_files = make_temp_files()
+node = env.CommandSelLdrTestNacl(
+    'limited_file_access_ro_test.out',
+    limited_file_access_nexe,
+    args=['-R'] + temp_directory_files,
+    sel_ldr_flags=['-m', mounted_directory, '-R', '-L'])
+
+env.AddNodeToTestSuite(node, ['small_tests'], 'run_limited_file_access_ro_test')
