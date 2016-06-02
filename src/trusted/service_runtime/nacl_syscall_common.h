@@ -52,12 +52,17 @@ void NaClInsecurelyBypassAllAclChecks(void);
  */
 extern char *NaClRootDir;
 extern size_t NaClRootDirLen;
+extern int NaClRootReadOnly;
+extern int NaClRootFollowSymlinks;
 
 /* bool */
-int NaClMountRootDir(const char *root);
+int NaClMountRootDir(const char *root, int readonly, int follow_symlinks);
 
 /* bool */
-int NaClFileAccessEnabled(void);
+int NaClFileAccessEnabledRead(void);
+
+/* bool */
+int NaClFileAccessEnabledWrite(void);
 
 /* bool */
 int NaClSysCommonAddrRangeContainsExecutablePages(struct NaClApp *nap,

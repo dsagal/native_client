@@ -34,22 +34,33 @@ int32_t NaClSysOpen(struct NaClAppThread  *natp,
   char                 path[NACL_CONFIG_PATH_MAX];
   nacl_host_stat_t     stbuf;
   int                  allowed_flags;
+  int                  write_flags = (NACL_ABI_O_WRONLY | NACL_ABI_O_RDWR
+                                      | NACL_ABI_O_CREAT | NACL_ABI_O_TRUNC);
 
   NaClLog(3, "NaClSysOpen(0x%08"NACL_PRIxPTR", "
           "0x%08"NACL_PRIx32", 0x%x, 0x%x)\n",
           (uintptr_t) natp, pathname, flags, mode);
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledRead()) {
     return -NACL_ABI_EACCES;
+  }
+
+  allowed_flags = (NACL_ABI_O_RDONLY | NACL_ABI_O_EXCL
+                   | NACL_ABI_O_APPEND | NACL_ABI_O_DIRECTORY);
+  if (NaClFileAccessEnabledWrite()) {
+    allowed_flags |= write_flags;
+  } else {
+    if (flags & write_flags) {
+      NaClLog(LOG_WARNING, "Invalid open flags 0%o for read-only mount\n",
+          flags);
+      return -NACL_ABI_EACCES;
+    }
   }
 
   retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname);
   if (0 != retval)
     goto cleanup;
 
-  allowed_flags = (NACL_ABI_O_ACCMODE | NACL_ABI_O_CREAT | NACL_ABI_O_EXCL
-                   | NACL_ABI_O_TRUNC | NACL_ABI_O_APPEND
-                   | NACL_ABI_O_DIRECTORY);
   if (0 != (flags & ~allowed_flags)) {
     NaClLog(LOG_WARNING, "Invalid open flags 0%o, ignoring extraneous bits\n",
             flags);
@@ -147,7 +158,7 @@ int32_t NaClSysStat(struct NaClAppThread  *natp,
           ("Entered NaClSysStat(0x%08"NACL_PRIxPTR", 0x%08"NACL_PRIx32","
            " 0x%08"NACL_PRIx32")\n"), (uintptr_t) natp, pathname, nasp);
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledRead()) {
     return -NACL_ABI_EACCES;
   }
 
@@ -178,7 +189,7 @@ int32_t NaClSysMkdir(struct NaClAppThread *natp,
   char           path[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledWrite()) {
     retval = -NACL_ABI_EACCES;
     goto cleanup;
   }
@@ -198,7 +209,7 @@ int32_t NaClSysRmdir(struct NaClAppThread *natp,
   char           path[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledWrite()) {
     retval = -NACL_ABI_EACCES;
     goto cleanup;
   }
@@ -218,7 +229,7 @@ int32_t NaClSysChdir(struct NaClAppThread *natp,
   char           path[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledRead()) {
     retval = -NACL_ABI_EACCES;
     goto cleanup;
   }
@@ -239,7 +250,7 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
   int32_t        retval = -NACL_ABI_EINVAL;
   char           path[NACL_CONFIG_PATH_MAX];
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledRead()) {
     retval = -NACL_ABI_EACCES;
     goto cleanup;
   }
@@ -263,7 +274,7 @@ int32_t NaClSysUnlink(struct NaClAppThread *natp,
   char           path[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledWrite()) {
     retval = -NACL_ABI_EACCES;
     goto cleanup;
   }
@@ -286,7 +297,7 @@ int32_t NaClSysTruncate(struct NaClAppThread *natp,
   int32_t        retval = -NACL_ABI_EINVAL;
   nacl_abi_off_t length;
 
-  if (!NaClFileAccessEnabled())
+  if (!NaClFileAccessEnabledWrite())
     return -NACL_ABI_EACCES;
 
   retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname);
@@ -314,7 +325,7 @@ int32_t NaClSysLstat(struct NaClAppThread  *natp,
           ("Entered NaClSysLstat(0x%08"NACL_PRIxPTR", 0x%08"NACL_PRIx32","
            " 0x%08"NACL_PRIx32")\n"), (uintptr_t) natp, pathname, nasp);
 
-  if (!NaClFileAccessEnabled()) {
+  if (!NaClFileAccessEnabledRead()) {
     return -NACL_ABI_EACCES;
   }
 
@@ -345,7 +356,7 @@ int32_t NaClSysLink(struct NaClAppThread *natp,
   char           newpath[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled())
+  if (!NaClFileAccessEnabledWrite())
     return -NACL_ABI_EACCES;
 
   retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname);
@@ -367,7 +378,7 @@ int32_t NaClSysRename(struct NaClAppThread *natp,
   char           newpath[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled())
+  if (!NaClFileAccessEnabledWrite())
     return -NACL_ABI_EACCES;
 
   retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname);
@@ -411,7 +422,7 @@ int32_t NaClSysChmod(struct NaClAppThread *natp,
   char           pathname[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled())
+  if (!NaClFileAccessEnabledWrite())
     return -NACL_ABI_EACCES;
 
   retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path);
@@ -428,7 +439,7 @@ int32_t NaClSysAccess(struct NaClAppThread *natp,
   char           pathname[NACL_CONFIG_PATH_MAX];
   int32_t        retval = -NACL_ABI_EINVAL;
 
-  if (!NaClFileAccessEnabled())
+  if (!NaClFileAccessEnabledRead())
     return -NACL_ABI_EACCES;
 
   /*
@@ -458,8 +469,10 @@ int32_t NaClSysReadlink(struct NaClAppThread *natp,
   uint32_t       result_size;
 
   /* We do not allow usage of symlinks in "-m" mode. */
-  if (!NaClAclBypassChecks)
+  if (!NaClAclBypassChecks && !(NaClFileAccessEnabledRead()
+                                && NaClRootFollowSymlinks)) {
     return -NACL_ABI_EACCES;
+  }
 
   retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path);
   if (0 != retval)
@@ -506,7 +519,7 @@ int32_t NaClSysUtimes(struct NaClAppThread *natp,
            " 0x%08"NACL_PRIxPTR")\n"),
           (uintptr_t) natp, (uintptr_t) path, (uintptr_t) times);
 
-  if (!NaClFileAccessEnabled())
+  if (!NaClFileAccessEnabledWrite())
     return -NACL_ABI_EACCES;
 
   retval = CopyHostPathInFromUser(nap, kern_path, sizeof kern_path, path);

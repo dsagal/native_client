@@ -82,9 +82,11 @@ void NaClInsecurelyBypassAllAclChecks(void) {
 
 char *NaClRootDir = NULL;
 size_t NaClRootDirLen = 0;
+int NaClRootReadOnly = 0;
+int NaClRootFollowSymlinks = 0;
 
 #if NACL_WINDOWS
-int NaClMountRootDir(const char *root) {
+int NaClMountRootDir(const char *root, int readonly, int follow_symlinks) {
   /*
    * TODO(smklein): Implement this functionality (and functionality
    * in sys_filename.c) for Windows.
@@ -93,7 +95,7 @@ int NaClMountRootDir(const char *root) {
 }
 
 #elif NACL_LINUX || NACL_OSX
-int NaClMountRootDir(const char *root) {
+int NaClMountRootDir(const char *root, int readonly, int follow_symlinks) {
   /* realpath mallocs NaClRootDir -- we must free it later */
   NaClRootDir = realpath(root, NULL);
   if (NaClRootDir == NULL) {
@@ -111,6 +113,8 @@ int NaClMountRootDir(const char *root) {
     goto fail;
   if (NaClRootDirLen >= NACL_CONFIG_PATH_MAX)
     goto fail;
+  NaClRootReadOnly = readonly;
+  NaClRootFollowSymlinks = follow_symlinks;
   return 1;
 fail:
   free(NaClRootDir);
@@ -122,7 +126,11 @@ fail:
 #error Unsupported platform
 #endif
 
-int NaClFileAccessEnabled(void) {
+int NaClFileAccessEnabledWrite(void) {
+  return NaClAclBypassChecks || (NaClRootDir != NULL && NaClRootReadOnly == 0);
+}
+
+int NaClFileAccessEnabledRead(void) {
   return NaClAclBypassChecks || (NaClRootDir != NULL);
 }
 
@@ -740,7 +748,7 @@ int32_t NaClSysSysconf(struct NaClAppThread *natp,
       break;
     }
     case NACL_ABI__SC_NACL_FILE_ACCESS_ENABLED: {
-      result_value = NaClFileAccessEnabled();
+      result_value = NaClFileAccessEnabledRead();
       break;
     }
     case NACL_ABI__SC_NACL_LIST_MAPPINGS_ENABLED: {

@@ -118,7 +118,7 @@ uint32_t ValidatePath(const std::string &path) {
    * Thus, we still require the caller of sel_ldr to guarantee that no symbolic
    * links are inside the mounted directory.
    */
-  if (IsSymbolicLink(path.c_str())) {
+  if (!NaClRootFollowSymlinks && IsSymbolicLink(path.c_str())) {
     return -NACL_ABI_EACCES;
   }
   return 0;

@@ -125,7 +125,7 @@ static void PrintUsage(void) {
           "               [-f nacl_file]\n"
           "               [-l log_file]\n"
           "               [-m fs_root]\n"
-          "               [-acFglQsSQv]\n"
+          "               [-acFglQsSQvRL]\n"
           "               -- [nacl_file] [args]\n"
           "\n");
   fprintf(stderr,
@@ -150,6 +150,8 @@ static void PrintUsage(void) {
           "    FOR A LIST OF CONSTRAINTS ON SETTING UP THE MOUNTED DIRECTORY.\n"
           "    If both -m and -a are passed, -m behavior supersedes -a for\n"
           "    filesystem operations.\n"
+          " -R Mount the directory specified with -m as read-only.\n"
+          " -L Follow all symlinks in the mounted directory (-R flag required)\n"
           "\n"
           " (testing flags)\n"
           " -a allow file access plus some other syscalls! dangerous!\n"
@@ -199,6 +201,8 @@ struct SelLdrOptions {
   int debug_mode_bypass_acl_checks;
   int debug_mode_ignore_validator;
   int debug_mode_startup_signal;
+  int mount_readonly;
+  int mount_follow_symlinks;
   struct redir *redir_queue;
   struct redir **redir_qend;
 };
@@ -226,6 +230,8 @@ static void SelLdrOptionsCtor(struct SelLdrOptions *options) {
   options->debug_mode_startup_signal = 0;
   options->redir_queue = NULL;
   options->redir_qend = &(options->redir_queue);
+  options->mount_readonly = 0;
+  options->mount_follow_symlinks = 0;
 }
 
 /* TODO(ncbray): do not directly set fields on NaClApp. */
@@ -255,7 +261,7 @@ static void NaClSelLdrParseArgs(int argc, char **argv,
 #if NACL_LINUX
                        "+D:z:"
 #endif
-                       "aB:cdeE:f:Fgh:i:l:m:pqQr:RsSvw:X:")) != -1) {
+                       "aB:cdeE:f:Fgh:i:l:Lm:pqQr:RsSvw:X:")) != -1) {
     switch (opt) {
       case 'a':
         if (!options->quiet)
@@ -349,6 +355,9 @@ static void NaClSelLdrParseArgs(int argc, char **argv,
           NaClLogSetFile(optarg);
         }
         break;
+      case 'L':
+        options->mount_follow_symlinks = 1;
+        break;
       case 'm':
         options->root_mount = optarg;
         break;
@@ -357,6 +366,9 @@ static void NaClSelLdrParseArgs(int argc, char **argv,
         break;
       case 'q':
         options->quiet = 1;
+        break;
+      case 'R':
+        options->mount_readonly = 1;
         break;
       case 'Q':
         if (!options->quiet)
@@ -552,13 +564,22 @@ int NaClSelLdrMain(int argc, char **argv) {
 #endif
   }
 
+  if (options->mount_readonly && !options->root_mount) {
+    NaClLog(LOG_FATAL, "-R option invalid without -m");
+    return -1;
+  }
+  if (options->mount_follow_symlinks && !options->mount_readonly) {
+    NaClLog(LOG_FATAL, "-L option invalid without -m and -R");
+    return -1;
+  }
 
   if (options->root_mount != NULL) {
 #if NACL_WINDOWS
     NaClLog(LOG_ERROR, "-m option not supported on Windows\n");
     return -1;
 #else
-    if (!NaClMountRootDir(options->root_mount)) {
+    if (!NaClMountRootDir(options->root_mount, options->mount_readonly,
+          options->mount_follow_symlinks)) {
       NaClLog(LOG_ERROR, "Failed to mount root dir\n");
       return -1;
     }
@@ -696,7 +717,7 @@ int NaClSelLdrMain(int argc, char **argv) {
    *
    * We cannot enable the sandbox if file access is enabled.
    */
-  if (!NaClFileAccessEnabled() && g_enable_outer_sandbox_func != NULL) {
+  if (!NaClFileAccessEnabledRead() && g_enable_outer_sandbox_func != NULL) {
     g_enable_outer_sandbox_func();
   }
 
