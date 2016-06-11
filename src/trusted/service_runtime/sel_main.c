@@ -565,12 +565,12 @@ int NaClSelLdrMain(int argc, char **argv) {
   }
 
   if (options->mount_readonly && !options->root_mount) {
-    NaClLog(LOG_ERROR, "-R option invalid without -m\n");
-    return -1;
+    fprintf(stderr, "-R option invalid without -m\n");
+    exit(1);
   }
   if (options->mount_follow_symlinks && !options->mount_readonly) {
-    NaClLog(LOG_ERROR, "-L option invalid without -m and -R\n");
-    return -1;
+    fprintf(stderr, "-L option invalid without -m and -R\n");
+    exit(1);
   }
 
   if (options->root_mount != NULL) {
