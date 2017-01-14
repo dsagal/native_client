@@ -28,6 +28,10 @@ BUILD_DIR = os.path.join(NACL_DIR, 'build')
 PACKAGE_VERSION_DIR = os.path.join(BUILD_DIR, 'package_version')
 PACKAGE_VERSION_SCRIPT = os.path.join(PACKAGE_VERSION_DIR, 'package_version.py')
 
+GOMA_DEFAULT_PATH = '/b/build/goma'
+GOMA_PATH = os.environ.get('GOMA_DIR', GOMA_DEFAULT_PATH)
+GOMA_CTL = os.path.join(GOMA_PATH, 'goma_ctl.py')
+
 # As this is a buildbot script, we want verbose logging. Note however, that
 # toolchain_build has its own log settings, controlled by its CLI flags.
 logging.getLogger().setLevel(logging.DEBUG)
@@ -72,7 +76,11 @@ toolchain_install_dir = os.path.join(
     '%s_%s' % (host_os, pynacl.platform.GetArch()),
     'pnacl_newlib')
 
-use_goma = buildbot_lib.RunningOnBuildbot() and not args.no_goma
+use_goma = (buildbot_lib.RunningOnBuildbot() and not args.no_goma
+            and os.path.isfile(GOMA_CTL))
+
+# If NOCONTROL_GOMA is set, the script does not start/stop goma compiler_proxy.
+control_goma = use_goma and not os.environ.get('NOCONTROL_GOMA')
 
 
 def ToolchainBuildCmd(sync=False, extra_flags=[]):
@@ -103,7 +111,7 @@ def ToolchainBuildCmd(sync=False, extra_flags=[]):
     executable_args.append('--disable-llvm-assertions')
 
   if use_goma:
-    executable_args.append('--goma=/b/build/goma')
+    executable_args.append('--goma=' + GOMA_PATH)
 
   return [sys.executable] + executable_args + sync_flag + extra_flags
 
@@ -137,9 +145,8 @@ if host_os != 'win':
          os.path.join(
              NACL_DIR, '..', 'tools', 'clang', 'scripts', 'update.py')])
 
-if use_goma:
-  buildbot_lib.Command(context, cmd=[
-      sys.executable, '/b/build/goma/goma_ctl.py', 'restart'])
+if control_goma:
+  buildbot_lib.Command(context, cmd=[sys.executable, GOMA_CTL, 'restart'])
 
 # toolchain_build outputs its own buildbot annotations, so don't use
 # buildbot_lib.Step to run it here.
@@ -152,9 +159,8 @@ if use_goma:
 # First build only the packages that will be uploaded, and upload them.
 RunWithLog(ToolchainBuildCmd(sync=True, extra_flags=['--canonical-only']))
 
-if use_goma:
-  buildbot_lib.Command(context, cmd=[
-      sys.executable, '/b/build/goma/goma_ctl.py', 'stop'])
+if control_goma:
+  buildbot_lib.Command(context, cmd=[sys.executable, GOMA_CTL, 'stop'])
 
 if args.skip_tests:
   sys.exit(0)
