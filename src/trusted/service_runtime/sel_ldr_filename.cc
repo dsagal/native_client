@@ -78,35 +78,19 @@ int NaClAddMount(const char *mount_spec) {
   // different notion of separator and absolute path (e.g. on Windows), we
   // achieve it by chdir() + getcwd(). That also ensures the mapped directory
   // is in fact a directory.
-  char cwd_orig[MAXPATHLEN];
-  retval = NaClHostDescGetcwd(cwd_orig, sizeof cwd_orig);
-  if (retval != 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: error reading current directory for -m");
-    return retval;
-  }
-
-  int32_t retval = NaClHostDescChdir(host_path.c_str());
-  if (retval != 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: -m host path isn't valid");
-    return retval;
-  }
-
-  char cwd_host[MAXPATHLEN];
-  retval = NaClHostDescGetcwd(cwd_host, sizeof cwd_host);
-  if (retval != 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: error reading new current directory");
-    return retval;
-  }
-
-  retval = NaClHostDescChdir(cwd_orig);
-  if (retval != 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: error returning to prior working dir");
-    return retval;
+  char cwd_orig[MAXPATHLEN] = "";
+  char abs_host[MAXPATHLEN] = "";
+  if (0 != NaClHostDescGetcwd(cwd_orig, sizeof cwd_orig) ||
+      0 != NaClHostDescChdir(host_path.c_str()) ||
+      0 != NaClHostDescGetcwd(abs_host, sizeof abs_host) ||
+      0 != NaClHostDescChdir(cwd_orig)) {
+    NaClLog(LOG_ERROR, "NaClAddMount: error testing -m host directory");
+    return 0;
   }
 
   struct VirtualMount mount;
   mount.virt_path = virt_path;
-  mount.host_path = cwd_host;
+  mount.host_path = abs_host;
   mount.is_writable = writable;
 
   // Find the insert position, sorted by decreasing length of virt_path.
