@@ -136,14 +136,13 @@ static void PrintUsage(void) {
           " -E <name=value>|<name> set an environment variable\n"
           " -p pass through all environment variables\n");
   fprintf(stderr,
-          " -m <directory> mount directory as root.\n"
-          "    If not provided (and -a is also missing), no filesystem access\n"
-          "    of any kind is allowed. If provided, safely allows read/write\n"
-          "    access to just the provided directory as if it were the FS\n"
-          "    root. BEFORE USING, READ 'documentation/filesystem_access.txt'\n"
-          "    FOR A LIST OF CONSTRAINTS ON SETTING UP THE MOUNTED DIRECTORY.\n"
-          "    If both -m and -a are passed, -m behavior supersedes -a for\n"
-          "    filesystem operations.\n"
+          " -m <host-dir>[:<virt-dir>:<options>] mount a directory.\n"
+          "    If given, enables filesystem access to host-dir when sandboxed code\n"
+          "    accesses virt-dir. Virt-dir must not contain colons. Options must be\n"
+          "    'ro' or 'rw'. Supercedes -a for filesystem access. If only host-dir\n"
+          "    (with no colons) is given, it is interpreted as 'host-dir:/:rw'.\n"
+          "    This option may be given more than once.\n"
+          "    See 'documentation/filesystem_access.txt'.\n"
           "\n"
           " (testing flags)\n"
           " -a allow file access plus some other syscalls! dangerous!\n"
@@ -175,12 +174,19 @@ static int my_getopt(int argc, char *const *argv, const char *shortopts) {
 #define my_getopt getopt
 #endif
 
+struct MountSpec {
+  char *spec;
+  struct MountSpec *next;
+};
+
 struct SelLdrOptions {
   char *nacl_file;
   char *blob_library_file;
-  char *root_mount;
   int app_argc;
   char **app_argv;
+
+  struct MountSpec *mount_list;
+  struct MountSpec **mount_end;
 
   int quiet;
   int verbosity;
@@ -203,7 +209,8 @@ static void SelLdrOptionsCtor(struct SelLdrOptions *options) {
 
   options->nacl_file = NULL;
   options->blob_library_file = NULL;
-  options->root_mount = NULL;
+  options->mount_list = NULL;
+  options->mount_end = &(options->mount_list);
   options->app_argc = 0;
   options->app_argv = NULL;
 
@@ -230,6 +237,7 @@ static void NaClSelLdrParseArgs(int argc, char **argv,
   int opt;
   char *rest;
   struct redir *entry;
+  struct MountSpec *mount_spec;
 
   options->verbosity = NaClLogGetVerbosity();
 
@@ -344,7 +352,16 @@ static void NaClSelLdrParseArgs(int argc, char **argv,
         }
         break;
       case 'm':
-        options->root_mount = optarg;
+        /* Add a mount spec to the linked list of them. */
+        mount_spec = malloc(sizeof MountSpec);
+        if (NULL == mount_spec) {
+          fprintf(stderr, "No memory for mount list\n");
+          exit(1);
+        }
+        mount_spec->spec = optarg;
+        mount_spec->next = NULL;
+        *(options->mount_end) = mount_spec;
+        options->mount_end = &mount_spec->next;
         break;
       case 'p':
         options->enable_env_passthrough = 1;
@@ -469,6 +486,17 @@ static void RedirectIO(struct NaClApp *nap, struct redir *redir_queue){
   }
 }
 
+static int ProcessMounts(struct MountSpec *list) {
+  struct MountSpec *entry;
+  for (entry = list; entry != NULL; entry = entry->next) {
+    if (!NaClAddMount(entry->spec)) {
+      NaClLog(LOG_ERROR, "Failed to add mount '%s'\n", entry->spec);
+      return 0;
+    }
+  }
+  return 1;
+}
+
 int NaClSelLdrMain(int argc, char **argv) {
   struct NaClApp                *nap = NULL;
   struct SelLdrOptions          optionsImpl;
@@ -547,16 +575,10 @@ int NaClSelLdrMain(int argc, char **argv) {
   }
 
 
-  if (options->root_mount != NULL) {
-#if NACL_WINDOWS
-    NaClLog(LOG_ERROR, "-m option not supported on Windows\n");
-    return -1;
-#else
-    if (!NaClMountRootDir(options->root_mount)) {
-      NaClLog(LOG_ERROR, "Failed to mount root dir\n");
+  if (options->mount_list != NULL) {
+    if (!ProcessMounts(options->mount_list)) {
       return -1;
     }
-#endif
   } else if (options->debug_mode_bypass_acl_checks) {
     /* If both -m and -a are specified, -m takes precedence. */
     NaClInsecurelyBypassAllAclChecks();
@@ -713,7 +735,8 @@ int NaClSelLdrMain(int argc, char **argv) {
    * directory. This is required for safety, because we allow relative
    * pathnames.
    */
-  if (NaClRootDir != NULL && NaClHostDescChdir(NaClRootDir)) {
+  // TODO: We want here a virtual-fs chdir("/").
+  if (NaClMountsEnabled() && NaClHostDescChdir(NaClRootDir)) {
     NaClLog(LOG_FATAL, "Could not change directory to root dir\n");
   }
 

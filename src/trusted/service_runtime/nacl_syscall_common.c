@@ -80,50 +80,8 @@ void NaClInsecurelyBypassAllAclChecks(void) {
   NaClAclBypassChecks = 1;
 }
 
-char *NaClRootDir = NULL;
-size_t NaClRootDirLen = 0;
-
-#if NACL_WINDOWS
-int NaClMountRootDir(const char *root) {
-  /*
-   * TODO(smklein): Implement this functionality (and functionality
-   * in sys_filename.c) for Windows.
-   */
-  return 0;
-}
-
-#elif NACL_LINUX || NACL_OSX
-int NaClMountRootDir(const char *root) {
-  /* realpath mallocs NaClRootDir -- we must free it later */
-  NaClRootDir = realpath(root, NULL);
-  if (NaClRootDir == NULL) {
-    NaClLog(LOG_INFO, "Could not sanitize mount directory\n");
-    goto fail;
-  }
-  NaClRootDirLen = strlen(NaClRootDir);
-
-  /*
-   * Currently, mounting at '/' is not allowed.
-   * This simplifies some path parsing issues later (for example, when
-   * creating a new file in the mounted directory).
-   */
-  if (NaClRootDirLen <= 1)
-    goto fail;
-  if (NaClRootDirLen >= NACL_CONFIG_PATH_MAX)
-    goto fail;
-  return 1;
-fail:
-  free(NaClRootDir);
-  NaClRootDir = NULL;
-  NaClRootDirLen = 0;
-  return 0;
-}
-#else
-#error Unsupported platform
-#endif
-
 int NaClFileAccessEnabled(void) {
-  return NaClAclBypassChecks || (NaClRootDir != NULL);
+  return NaClAclBypassChecks || NaClMountsEnabled();
 }
 
 int NaClHighResolutionTimerEnabled(void) {

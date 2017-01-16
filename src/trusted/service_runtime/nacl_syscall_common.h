@@ -46,16 +46,6 @@ extern int NaClAclBypassChecks;
 
 void NaClInsecurelyBypassAllAclChecks(void);
 
-/*
- * NaClRootDir will not be NULL when a root dir has been provided and NULL
- * otherwise.
- */
-extern char *NaClRootDir;
-extern size_t NaClRootDirLen;
-
-/* bool */
-int NaClMountRootDir(const char *root);
-
 /* bool */
 int NaClFileAccessEnabled(void);
 

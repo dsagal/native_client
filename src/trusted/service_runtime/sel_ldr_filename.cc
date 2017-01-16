@@ -22,121 +22,117 @@
 #include "native_client/src/trusted/service_runtime/nacl_syscall_common.h"
 #include "native_client/src/trusted/service_runtime/sel_ldr.h"
 
-namespace {
+struct VirtualMount {
+  string host_path;
+  string virt_path;
+  bool is_writable;
+};
 
-/*
- * Verifies the path is prefixed by the root directory of the restricted
- * filesystem.
- *
- * @param[in] path The path being checked.
- * @param[in] path_len The length of |path|.
- * @return 0 if path does NOT contain the prefix, else 1.
- */
-int PathContainsRootPrefix(const char *path, size_t path_len) {
-  /* The full path must be at least as long as the root to contain it. */
-  if (path_len < NaClRootDirLen)
+// This is stored sorted by the decreasing length of virt_path. This ensures
+// that translations work by matching the longest virtual prefix first. Note
+// that the same order is appropriate for translations from host paths.
+vector<VirtualMount> virtual_mounts;
+
+
+// Note that when storing paths, we store them as absolute normalized paths, to
+// make sure we match virtual paths when processing the result of RealPath, and
+// match host paths returned by NaClHostDescGetcwd().
+int NaClAddMount(const char *mount_spec) {
+  string spec(mount_spec);
+
+  // A bare path is equivalent to mounting rw as root. It is mainly supported
+  // for compatibility with the way -m worked previously, and for convenience.
+  if (spec.rfind(":") == string::npos) {
+    spec.append(":/:rw");
+  }
+
+  // Parse the "<host-dir>:<virt-dir>:[ro|rw]" spec.
+  size_t colon2 = spec.rfind(":");
+  if (colon2 == string::npos || colon2 == 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: Invalid -m mount spec");
     return 0;
-  /* The first 'NaClRootDirLen' bytes must match. */
-  if (strncmp(NaClRootDir, path, NaClRootDirLen))
+  }
+  string options = spec.substr(colon2 + 1);
+  if (options != "ro" && options != "rw") {
+    NaClLog(LOG_ERROR, "NaClAddMount: -m mount option must be 'ro' or 'rw'");
     return 0;
-  /* If the root is "/foo", then "/foobar" should be marked as invalid. */
-  if (path_len > NaClRootDirLen && path[NaClRootDirLen] != '/')
+  }
+
+  size_t colon1 = spec.rfind(":", colon2 - 1);
+  if (colon1 == string::npos || colon1 == 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: Invalid -m mount spec");
     return 0;
+  }
+  string virt_path = spec.substr(colon1 + 1, colon2 - colon1 - 1);
+
+  if (!IsAbsolute(virt_path)) {
+    NaClLog(LOG_ERROR, "NaClAddMount: -m mount path must be absolute");
+    return 0;
+  }
+  // Calling AbsPath() normalizes the path, ensuring it contains no . .. or //.
+  virt_path = AbsPath(virt_path);
+
+  string host_path = spec.substr(0, colon1);
+
+  // It is also important to normalize the host path. Since that one may use a
+  // different notions (e.g. separator, absolute paths are different on
+  // Windows), we achive it by chdir() + getcwd(). That also ensures the mapped
+  // directory is in fact a directory.
+  // TODO: it should use the host calls
+  //    retval = NaClHostDescChdir(path);
+  //    retval = NaClHostDescGetcwd(host_path, NACL_CONFIG_PATH_MAX);
+  //cwd = getcwd();
+  //chdir(host_path);
+  //host_path = getcwd();
+  //chdir(cwd);
+
+  struct VirtualMount mount;
+  mount.virt_path = virt_path;
+  mount.host_path = host_path;
+  mount.is_writable = writable;
+
+  // Find the insert position, sorted by decreasing length of virt_path.
+  vector<VirtualMount>::iterator it;
+  for (it = virtual_mounts.begin(); it != virtual_mounts.end(); ++it) {
+    if (it->virt_path.length() < mount.virt_path.length()) {
+      break;
+    }
+  }
+  virtual_mounts.insert(it, mount);
   return 1;
 }
 
-#if !NACL_WINDOWS
-/*
- * Given a |virtual_path| (a path supplied by the user with no knowledge of the
- * mounted directory) transform it into an |absolute_path|, which is a path that
- * (while still virtual) is an absolute path inside the mounted directory.
- *
- * @param[in] virtual_path Virtual path supplied by user.
- * @param[out] absolute_path The absolute path referenced by the |virtual_path|.
- * @return 0 on success, else a negated NaCl errno.
- */
-uint32_t VirtualToAbsolutePath(const std::string &virtual_path,
-                               std::string *absolute_path) {
-  absolute_path->clear();
-  CHECK(virtual_path.length() >= 1);
-  if (virtual_path[0] != '/') {
-    /* Relative Path = Cwd + '/' + Relative Virtual Path */
-    char cwd_path[NACL_CONFIG_PATH_MAX];
-    int retval = NaClHostDescGetcwd(cwd_path, sizeof(cwd_path));
-    if (retval != 0) {
-      NaClLog(LOG_ERROR, "NaClHostDescGetcwd failed\n");
-      return retval;
-    }
-
-    /*
-     * This shouldn't fail unless someone outside of the restricted filesystem
-     * has moved the root directory.
-     */
-    if (!PathContainsRootPrefix(cwd_path, strlen(cwd_path)))
-      return (uint32_t) -NACL_ABI_EACCES;
-
-    absolute_path->append(cwd_path + NaClRootDirLen);
-    absolute_path->push_back('/');
-  }
-  absolute_path->append(virtual_path);
-  return 0;
+int NaClMountsEnabled() {
+  return !virtual_mounts.empty() ? 1 : 0;
 }
 
-/*
- * Determine if |path| points to a symbolic link.
- *
- * @param[in] path Path of file to be checked.
- * @return Nonzero if path is symbolic link.
- */
-int IsSymbolicLink(const char *path) {
-  struct stat buf;
-  int result = lstat(path, &buf);
-  return result == 0 && S_ISLNK(buf.st_mode);
-}
+namespace {
 
 /*
- * Verify the absolute path contains the NaClRootDir prefix.
+ * Translates a path between host and virtual filesystems. The direction is
+ * determined by the to_host flag.
  *
- * @param[in] path The canonical path to be verified.
- * @return 0 if the path is valid, else a negated NaCl errno.
+ * @param[in] src_path The source path (virtual if to_host is set, else host).
+ * @param[out] dest_path The output path (host if to_host is set, else virtual).
+ * @param[in] to_host True to translate virtual to host, false for backwards.
+ * @param[out] writable Will contain whether this path is on a writable mount.
+ * @return true on success, false if src_path matched no mount points.
  */
-uint32_t ValidatePath(const std::string &path) {
-  CHECK(path.length() >= 1);
-  CHECK(PathContainsRootPrefix(path.c_str(), path.length()));
-
-  /*
-   * This is an informal check, and we still require the users of sel_ldr to
-   * ensure that no symbolic links exist in the mounted directory.
-   *
-   * A race condition exists that can bypass this check:
-   * 1) Open (or any file access function) called on a path to a regular
-   *    file (PATH_REG). "IsSymbolicLink" returns zero, but the original file
-   *    access function has not yet been called.
-   * 2) Outside of sel_ldr, a symbolic link is moved into PATH_REG.
-   * 3) The original file access function is called on a symbolic link.
-   *
-   * Thus, we still require the caller of sel_ldr to guarantee that no symbolic
-   * links are inside the mounted directory.
-   */
-  if (IsSymbolicLink(path.c_str())) {
-    return -NACL_ABI_EACCES;
-  }
-  return 0;
-}
-
-uint32_t ValidateSubpaths(std::vector<std::string> *required_subpaths) {
-  for (size_t i = 0; i != required_subpaths->size(); i++) {
-    (*required_subpaths)[i].insert(0, NaClRootDir);
-    struct stat buf;
-    int retval = stat((*required_subpaths)[i].c_str(), &buf);
-    if (retval != 0) {
-      if (errno == ELOOP || errno == EOVERFLOW || errno == ENOMEM)
-        NaClLog(LOG_FATAL, "Unexpected error validating path\n");
-      return -NaClXlateErrno(errno);
+bool TranslatePath(const string &src_path, string *dest_path,
+                   bool to_host, bool *writable) {
+  string ret = host_path;
+  vector<VirtualMount>::const_iterator it;
+  for (it = virtual_mounts.begin(); it != virtual_mounts.end(); ++it) {
+    const string &from = to_host ? it->virt_path : it->host_path;
+    const string &to = to_host ? it->host_path : it->virt_path;
+    if (ReplacePathPrefix(ret, from, to)) {
+      *writable = it->is_writable;
+      return true;
     }
   }
-  return 0;
+  return false;
 }
+
 
 /*
  * Transforms a raw file path from the user into an absolute path prefixed by
@@ -147,7 +143,8 @@ uint32_t ValidateSubpaths(std::vector<std::string> *required_subpaths) {
  * @param[in] dest_max_size The size of the buffer holding dest.
  * @return 0 on success, else a NaCl errno.
  */
-uint32_t CopyHostPathMounted(char *dest, size_t dest_max_size) {
+uint32_t CopyHostPathMounted(char *dest, size_t dest_max_size,
+                             bool *is_writable) {
   /* Transform the input C string into a std::string for easier manipulation. */
   const std::string raw_path(dest);
 
@@ -159,46 +156,31 @@ uint32_t CopyHostPathMounted(char *dest, size_t dest_max_size) {
   CHECK(dest_max_size == NACL_CONFIG_PATH_MAX);
   CHECK(raw_path.length() < NACL_CONFIG_PATH_MAX);
 
-  uint32_t retval;
-  std::string abs_path;
-  retval = VirtualToAbsolutePath(raw_path, &abs_path);
-  if (retval != 0)
-    return retval;
+  std::string resolved_path, host_path;
+  if (!RealPath(raw_path, &resolved_path)) {
+    return -NaClXlateErrno(errno);
+  }
+  if (!TranslatePath(resolved_path, &host_path, true, is_writable)) {
+    return -NACL_ABI_EACCES;
+  }
 
-  std::string real_path;
-  std::vector<std::string> required_subpaths;
-  CanonicalizeAbsolutePath(abs_path, &real_path, &required_subpaths);
-  retval = ValidateSubpaths(&required_subpaths);
-  if (retval != 0)
-    return retval;
-
-  /*
-   * Prefix the root directory, making 'real_path' canonical, absolute, and
-   * non-virtual.
-   */
-  real_path.insert(0, NaClRootDir);
-
-  /* Verify that the path cannot escape root. */
-  retval = ValidatePath(real_path);
-  if (retval != 0)
-    return retval;
-
-  if (real_path.length() + 1 > dest_max_size) {
-    NaClLog(LOG_WARNING, "Pathname too long: %s\n", real_path.c_str());
+  if (host_path.length() + 1 > dest_max_size) {
+    NaClLog(LOG_WARNING, "Pathname too long: %s\n", host_path.c_str());
     return -NACL_ABI_ENAMETOOLONG;
   }
   /* Copy the C++ string into its C string destination. */
-  strcpy(dest, real_path.c_str()); //NOLINT
+  strcpy(dest, host_path.c_str()); //NOLINT
   return 0;
 }
-#endif /* !NACL_WINDOWS */
 
 }  // namespace
+
 
 uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
                                 char           *dest,
                                 size_t         dest_max_size,
-                                uint32_t       src) {
+                                uint32_t       src,
+                                uint32_t       req_writable) {
   /*
    * NaClCopyInFromUserZStr may (try to) get bytes that is outside the
    * app's address space and generate a fault.
@@ -217,52 +199,31 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
    * Without the '-m' option, this function should act like a simple
    * raw path copy.
    */
-  if (NaClRootDir == NULL) {
+  if (!NaClMountsEnabled()) {
     return 0;
   }
-#if NACL_WINDOWS
-  return 0;
-#else
-  return CopyHostPathMounted(dest, dest_max_size);
-#endif /* NACL_WINDOWS */
+  bool is_writable = false;
+  uint32_t retval = CopyHostPathMounted(dest, dest_max_size, &is_writable);
+  if (retval == 0 && req_writable && !is_writable) {
+    retval = -NACL_ABI_ACCESS;
+  }
+  return retval;
 }
 
-uint32_t CopyHostPathOutToUser(struct NaClApp *nap,
-                               uint32_t        dst_usr_addr,
-                               char           *path) {
-  /*
-   * The input |path| to CopyHostPathOutToUser is the result of an operation on
-   * a buffer (such as getcwd) which has a size supplied by the user. The result
-   * path which is copied to dst_usr_addr must be the same length as |path| (or
-   * shorter) to fit inside the user-allocated buffer.
-   */
-  size_t path_len = strlen(path);
-  /* Check if we need to perform any path sanitization. */
-  if (NaClRootDir == NULL) {
-    if (!NaClCopyOutToUser(nap, dst_usr_addr, path, path_len + 1))
-      return (uint32_t) -NACL_ABI_EFAULT;
-    return 0;
+
+uint32_t MapPathFromHost(const char *host_path, char *virt_dest,
+                         size_t dest_max_size) {
+  string src_path(host_path);
+  string dest_path;
+  bool is_writable = false;
+  if (!TranslatePath(src_path, &dest_path, false, &is_writable)) {
+    return -NACL_ABI_EACCES;
   }
 
-  if (!PathContainsRootPrefix(path, path_len))
-    return (uint32_t) -NACL_ABI_EACCES;
-
-  if (path[NaClRootDirLen] == '\0') {
-    /*
-     * In this case, the path we're copying out *is* NaClRootDir, which means
-     * it doesn't end with a trailing slash, and all we want to do is return
-     * a slash. Special case.
-     *
-     * 2 bytes copied for slash + null terminator.
-     */
-    if (!NaClCopyOutToUser(nap, dst_usr_addr, "/", 2))
-      return (uint32_t) -NACL_ABI_EFAULT;
-    return 0;
+  if (dest_path.length() + 1 > dest_max_size) {
+    return -NACL_ABI_ENAMETOOLONG;
   }
-
-  /* Copy out everything after the root dir (including the slash). */
-  if (!NaClCopyOutToUser(nap, dst_usr_addr, path + NaClRootDirLen,
-                         path_len - NaClRootDirLen + 1))
-    return (uint32_t) -NACL_ABI_EFAULT;
+  /* Copy the C++ string into its C string destination. */
+  strcpy(virt_dest, dest_path.c_str()); //NOLINT
   return 0;
 }

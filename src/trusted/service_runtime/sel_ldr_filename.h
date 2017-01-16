@@ -20,6 +20,23 @@
 EXTERN_C_BEGIN
 
 /*
+ * Given a mount spec of the form <host-dir>:<virt-dir>:[ro|rw], as expected by
+ * the -m option, adds it to internal structures for path translation.
+ *
+ * @param[in] mount_spec A mount spec of the form * <host-dir>:<virt-dir>:[ro|rw]
+ *    (or just <host-dir>, which will be interpreted as '<host-dir>:/:rw').
+ * @return 1 on success, 0 on error.
+ */
+int NaClAddMount(const char *mount_spec);
+
+
+/*
+ * Returns 1 if virtual filesystem mounts have been set up (enabling filesystem
+ * access), 0 otherwise.
+ */
+int NaClMountsEnabled();
+
+/*
  * Given a file path at |src| from the user, copy the path into a buffer |dest|.
  *
  * This function abstracts the complexity of using a "mounted filesystem" --
@@ -32,25 +49,23 @@ EXTERN_C_BEGIN
  * @param[out] dest A buffer to contain the user's path argument.
  * @param[in] dest_max_size The size of the dest buffer.
  * @param[in] src A pointer to user's path buffer.
+ * @param[in] req_writable If non-zero, require dest to be on a writable mount.
  * @return 0 on success, else a negated NaCl errno.
  */
 uint32_t CopyHostPathInFromUser(struct NaClApp *nap, char *dest,
-                                size_t dest_max_size, uint32_t src);
+                                size_t dest_max_size, uint32_t src,
+                                uint32_t req_writable);
 
 /*
- * Given an absolute file path at |path|, copy the path into a user allocated
- * buffer at |dst_user_addr|.
+ * Translates a canonical host path into a virtual path and fills in virt_dest.
  *
- * Like "CopyHostPathInFromUser", this function abstracts away the "mounted
- * filesystem".
- *
- * @param[in] nap The NaCl application object.
- * @param[in] dst_usr_addr The destination of the user allocated buffer.
- * @param[in] path A buffer containing the absolute file path to be copied.
+ * @param[in] host_path The host path, which must be absolute and normalized.
+ * @param[out] virt_dest A buffer to contain the translated virtual path.
+ * @param[in] dest_max_size The size of virt_dest buffer.
  * @return 0 on success, else a negated NaCl errno.
  */
-uint32_t CopyHostPathOutToUser(struct NaClApp *nap, uint32_t dst_usr_addr,
-                               char *path);
+uint32_t MapPathFromHost(const char *host_path, char *virt_dest,
+                         size_t dest_max_size);
 
 EXTERN_C_END
 
