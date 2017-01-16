@@ -486,6 +486,9 @@ static void RedirectIO(struct NaClApp *nap, struct redir *redir_queue){
   }
 }
 
+/*
+ * Processes the list of -m mounts, returning 1 on success, 0 on error.
+ */
 static int ProcessMounts(struct MountSpec *list) {
   struct MountSpec *entry;
   for (entry = list; entry != NULL; entry = entry->next) {
@@ -496,6 +499,19 @@ static int ProcessMounts(struct MountSpec *list) {
   }
   return 1;
 }
+
+/*
+ * Changes working directory to the given virtual path, returning 0 on success.
+ */
+static int32_t ChdirVirtualPath(const char *virt_path) {
+  char host_path[MAXPATHLEN];
+  int32_t retval = TranslateVirtualPath("/", host_path, sizeof host_path, true);
+  if (retval != 0) {
+    return retval;
+  }
+  return NaClHostDescChdir(host_path);
+}
+
 
 int NaClSelLdrMain(int argc, char **argv) {
   struct NaClApp                *nap = NULL;
@@ -735,8 +751,7 @@ int NaClSelLdrMain(int argc, char **argv) {
    * directory. This is required for safety, because we allow relative
    * pathnames.
    */
-  // TODO: We want here a virtual-fs chdir("/").
-  if (NaClMountsEnabled() && NaClHostDescChdir(NaClRootDir)) {
+  if (NaClMountsEnabled() && ChdirVirtualPath("/")) {
     NaClLog(LOG_FATAL, "Could not change directory to root dir\n");
   }
 

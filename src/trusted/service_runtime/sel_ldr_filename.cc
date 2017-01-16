@@ -74,21 +74,39 @@ int NaClAddMount(const char *mount_spec) {
 
   string host_path = spec.substr(0, colon1);
 
-  // It is also important to normalize the host path. Since that one may use a
-  // different notions (e.g. separator, absolute paths are different on
-  // Windows), we achive it by chdir() + getcwd(). That also ensures the mapped
-  // directory is in fact a directory.
-  // TODO: it should use the host calls
-  //    retval = NaClHostDescChdir(path);
-  //    retval = NaClHostDescGetcwd(host_path, NACL_CONFIG_PATH_MAX);
-  //cwd = getcwd();
-  //chdir(host_path);
-  //host_path = getcwd();
-  //chdir(cwd);
+  // It is also important to normalize the host path. Since it may use a
+  // different notion of separator and absolute path (e.g. on Windows), we
+  // achieve it by chdir() + getcwd(). That also ensures the mapped directory
+  // is in fact a directory.
+  char cwd_orig[MAXPATHLEN];
+  retval = NaClHostDescGetcwd(cwd_orig, sizeof cwd_orig);
+  if (retval != 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: error reading current directory for -m");
+    return retval;
+  }
+
+  int32_t retval = NaClHostDescChdir(host_path.c_str());
+  if (retval != 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: -m host path isn't valid");
+    return retval;
+  }
+
+  char cwd_host[MAXPATHLEN];
+  retval = NaClHostDescGetcwd(cwd_host, sizeof cwd_host);
+  if (retval != 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: error reading new current directory");
+    return retval;
+  }
+
+  retval = NaClHostDescChdir(cwd_orig);
+  if (retval != 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: error returning to prior working dir");
+    return retval;
+  }
 
   struct VirtualMount mount;
   mount.virt_path = virt_path;
-  mount.host_path = host_path;
+  mount.host_path = cwd_host;
   mount.is_writable = writable;
 
   // Find the insert position, sorted by decreasing length of virt_path.
@@ -126,7 +144,9 @@ bool TranslatePath(const string &src_path, string *dest_path,
     const string &from = to_host ? it->virt_path : it->host_path;
     const string &to = to_host ? it->host_path : it->virt_path;
     if (ReplacePathPrefix(ret, from, to)) {
-      *writable = it->is_writable;
+      if (writable) {
+        *writable = it->is_writable;
+      }
       return true;
     }
   }
@@ -199,7 +219,7 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
    * Without the '-m' option, this function should act like a simple
    * raw path copy.
    */
-  if (!NaClMountsEnabled()) {
+  if (NaClAclBypassChecks) {
     return 0;
   }
   bool is_writable = false;
@@ -211,19 +231,22 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
 }
 
 
-uint32_t MapPathFromHost(const char *host_path, char *virt_dest,
-                         size_t dest_max_size) {
-  string src_path(host_path);
-  string dest_path;
-  bool is_writable = false;
-  if (!TranslatePath(src_path, &dest_path, false, &is_writable)) {
-    return -NACL_ABI_EACCES;
+uint32_t TranslateVirtualPath(const char *src_path, char *dest_path,
+                              size_t dest_max_size, int to_host) {
+  string dest;
+
+  if (NaClAclBypassChecks) {
+    dest = src_path;
+  } else {
+    if (!TranslatePath(src_path, &dest, to_host, NULL)) {
+      return -NACL_ABI_EACCES;
+    }
   }
 
-  if (dest_path.length() + 1 > dest_max_size) {
+  if (dest.length() + 1 > dest_max_size) {
     return -NACL_ABI_ENAMETOOLONG;
   }
   /* Copy the C++ string into its C string destination. */
-  strcpy(virt_dest, dest_path.c_str()); //NOLINT
+  strcpy(dest_path, dest.c_str()); //NOLINT
   return 0;
 }

@@ -259,7 +259,8 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
   if (NaClAclBypassChecks) {
     path = host_path;
   } else {
-    retval = MapPathFromHost(host_path, virt_path, NACL_CONFIG_PATH_MAX);
+    retval = TranslateVirtualPath(host_path, virt_path, NACL_CONFIG_PATH_MAX,
+                                  false);
     if (retval != 0) {
       return retval;
     }

@@ -57,15 +57,18 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap, char *dest,
                                 uint32_t req_writable);
 
 /*
- * Translates a canonical host path into a virtual path and fills in virt_dest.
+ * Translates a path between host and virtual filesystems. The direction is
+ * determined by the to_host flag.
  *
- * @param[in] host_path The host path, which must be absolute and normalized.
- * @param[out] virt_dest A buffer to contain the translated virtual path.
- * @param[in] dest_max_size The size of virt_dest buffer.
+ * @param[in] src_path The source path (virtual if to_host is set, else host).
+ * @param[out] dest_path The output path (host if to_host is set, else virtual).
+ * @param[in] dest_max_size The size of dest_path buffer.
+ * @param[in] to_host Non-zero to translate virtual to host, 0 for backwards.
  * @return 0 on success, else a negated NaCl errno.
  */
-uint32_t MapPathFromHost(const char *host_path, char *virt_dest,
-                         size_t dest_max_size);
+uint32_t TranslateVirtualPath(const char *src_path, char *dest_path,
+                              size_t dest_max_size, int to_host);
+
 
 EXTERN_C_END
 
