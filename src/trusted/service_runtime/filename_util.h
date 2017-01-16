@@ -47,6 +47,28 @@
  * cause a rejection rather than an escape out of the mounted directory.)
  */
 
+namespace nacl_filename_util {
+
+// Class FS abstracts out the operations required by this module. It also
+// allows mocking them for testing.
+class FS {
+  public:
+    virtual ~FS() {}
+    // These methods return 0 on success, else a negated NaCl errno.
+    virtual int32_t Getcwd(std::string *path) const = 0;
+    virtual int32_t Readlink(const std::string &path,
+                             std::string *link_path) const = 0;
+};
+
+bool StartsWith(const std::string &str, const std::string &prefix);
+bool EndsWith(const std::string &str, const std::string &suffix);
+bool IsAbsolute(const std::string &path);
+bool StartsWithPath(const std::string &path, const std::string &path_prefix);
+bool ReplacePathPrefix(std::string *path, const std::string &prefix,
+                       const std::string &repl);
+std::string JoinComponents(const std::string &head, const std::string &tail);
+std::string RemoveLastComponent(std::string *path);
+std::string RemoveFirstComponent(std::string *path);
 
 /*
  * Makes path absolute and normalizes it, eliminating extra "/" characters and
@@ -54,9 +76,10 @@
  *
  * @param[in] path The path to be resolved (in virtual FS).
  * @param[out] resolved_path The resulting absolute path (in virtual FS).
- * @return true on success, false on failure (and sets errno).
+ * @return 0 on success, else a negated NaCl errno.
  */
-bool AbsPath(const std::string &path, std::string *resolved_path);
+int32_t AbsPath(const FS &fs, const std::string &path,
+                std::string *resolved_path);
 
 /*
  * Resolves path into a canonical absolute path, resolving all symbolic links,
@@ -66,8 +89,11 @@ bool AbsPath(const std::string &path, std::string *resolved_path);
  *
  * @param[in] path The path to be resolved (in virtual FS).
  * @param[out] resolved_path The resulting absolute path (in virtual FS).
- * @return true on success, false on failure (and sets errno).
+ * @return 0 on success, else a negated NaCl errno.
  */
-bool RealPath(const std::string &path, std::string *resolved_path);
+int32_t RealPath(const FS &fs, const std::string &path,
+                 std::string *resolved_path);
+
+}
 
 #endif /* NATIVE_CLIENT_SRC_TRUSTED_SERVICE_RUNTIME_FILENAME_UTIL_H_ */

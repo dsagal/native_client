@@ -22,16 +22,114 @@
 #include "native_client/src/trusted/service_runtime/nacl_syscall_common.h"
 #include "native_client/src/trusted/service_runtime/sel_ldr.h"
 
-struct VirtualMount {
-  string host_path;
-  string virt_path;
-  bool is_writable;
+using std::vector;
+using std::string;
+using nacl_filename_util::IsAbsolute;
+using nacl_filename_util::ReplacePathPrefix;
+using nacl_filename_util::AbsPath;
+using nacl_filename_util::RealPath;
+
+class SandboxFS : public nacl_filename_util::FS {
+  private:
+    struct VirtualMount {
+      string host_path;
+      string virt_path;
+      bool is_writable;
+    };
+
+    // These are stored sorted by the decreasing length of virt_path. This
+    // ensures that we match the longest virtual prefix first. Note that the
+    // same order is appropriate for both directions of translation.
+    vector<VirtualMount> virtual_mounts_;
+
+  public:
+
+    bool Enabled() const {
+      return !virtual_mounts_.empty();
+    }
+
+    void AddMount(string host_path, string virt_path, bool is_writable) {
+      VirtualMount mount;
+      mount.host_path = host_path;
+      mount.virt_path = virt_path;
+      mount.is_writable = is_writable;
+
+      // Find the insert position, sorted by decreasing length of virt_path.
+      vector<VirtualMount>::iterator it;
+      for (it = virtual_mounts_.begin(); it != virtual_mounts_.end(); ++it) {
+        if (it->virt_path.length() < mount.virt_path.length()) {
+          break;
+        }
+      }
+      virtual_mounts_.insert(it, mount);
+    }
+
+    /*
+     * Translates a path between host and virtual filesystems. The direction is
+     * determined by the to_host flag.
+     *
+     * @param[in] src_path The source path (virtual if to_host is set, else host).
+     * @param[out] dest_path The output path (host if to_host is set, else virtual).
+     * @param[in] to_host True to translate virtual to host, false for backwards.
+     * @param[out] writable Will contain whether this path is on a writable mount.
+     * @return true on success, false if src_path matched no mount points.
+     */
+    bool TranslatePath(const string &src_path, string *dest_path,
+                       bool to_host, bool *writable) const {
+      dest_path->assign(src_path);
+      vector<VirtualMount>::const_iterator it;
+      for (it = virtual_mounts_.begin(); it != virtual_mounts_.end(); ++it) {
+        const string &from = to_host ? it->virt_path : it->host_path;
+        const string &to = to_host ? it->host_path : it->virt_path;
+        if (ReplacePathPrefix(dest_path, from, to)) {
+          if (writable) {
+            *writable = it->is_writable;
+          }
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // These methods return 0 on success, else a negated NaCl errno.
+    int32_t Getcwd(std::string *path) const {
+      char buf[NACL_CONFIG_PATH_MAX] = "";
+      int32_t retval = NaClHostDescGetcwd(buf, sizeof buf);
+      if (retval != 0) {
+        return retval;
+      }
+      string host_path(buf);
+      if (!TranslatePath(host_path, path, false, NULL)) {
+        return -NACL_ABI_EACCES;
+      }
+      return 0;
+    }
+
+    int32_t Readlink(const std::string &path, std::string *link_path) const {
+      string host_path;
+      if (!TranslatePath(path, &host_path, true, NULL)) {
+        return -NACL_ABI_EACCES;
+      }
+      char buf[NACL_CONFIG_PATH_MAX] = "";
+      int32_t retval = NaClHostDescReadlink(host_path.c_str(), buf, sizeof buf);
+      if (retval < 0) {
+        return retval;
+      }
+      // A positive value is the number of characters placed into buf (with no
+      // terminating null). If it filled the buffer, treat it as truncation.
+      if ((uint32_t)retval >= sizeof buf) {
+        return -NACL_ABI_ENAMETOOLONG;
+      }
+      // Note that symlink target is always interpreted as a virtual path, and
+      // we do not translate it. Reliable translation isn't trivial because the
+      // path may not be normalized. For symlinks that need to work in both
+      // host and virtual OS, use relative paths.
+      link_path->assign(buf, retval);
+      return 0;
+    }
 };
 
-// This is stored sorted by the decreasing length of virt_path. This ensures
-// that translations work by matching the longest virtual prefix first. Note
-// that the same order is appropriate for translations from host paths.
-vector<VirtualMount> virtual_mounts;
+SandboxFS sandbox_fs;
 
 
 // Note that when storing paths, we store them as absolute normalized paths, to
@@ -70,7 +168,12 @@ int NaClAddMount(const char *mount_spec) {
     return 0;
   }
   // Calling AbsPath() normalizes the path, ensuring it contains no . .. or //.
-  virt_path = AbsPath(virt_path);
+  string abs_virt;
+  int32_t retval = AbsPath(sandbox_fs, virt_path, &abs_virt);
+  if (retval != 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: error normalizing -m mount path");
+    return 0;
+  }
 
   string host_path = spec.substr(0, colon1);
 
@@ -78,8 +181,8 @@ int NaClAddMount(const char *mount_spec) {
   // different notion of separator and absolute path (e.g. on Windows), we
   // achieve it by chdir() + getcwd(). That also ensures the mapped directory
   // is in fact a directory.
-  char cwd_orig[MAXPATHLEN] = "";
-  char abs_host[MAXPATHLEN] = "";
+  char cwd_orig[NACL_CONFIG_PATH_MAX] = "";
+  char abs_host[NACL_CONFIG_PATH_MAX] = "";
   if (0 != NaClHostDescGetcwd(cwd_orig, sizeof cwd_orig) ||
       0 != NaClHostDescChdir(host_path.c_str()) ||
       0 != NaClHostDescGetcwd(abs_host, sizeof abs_host) ||
@@ -88,54 +191,15 @@ int NaClAddMount(const char *mount_spec) {
     return 0;
   }
 
-  struct VirtualMount mount;
-  mount.virt_path = virt_path;
-  mount.host_path = abs_host;
-  mount.is_writable = writable;
-
-  // Find the insert position, sorted by decreasing length of virt_path.
-  vector<VirtualMount>::iterator it;
-  for (it = virtual_mounts.begin(); it != virtual_mounts.end(); ++it) {
-    if (it->virt_path.length() < mount.virt_path.length()) {
-      break;
-    }
-  }
-  virtual_mounts.insert(it, mount);
+  sandbox_fs.AddMount(abs_host, abs_virt, options == "rw");
   return 1;
 }
 
 int NaClMountsEnabled() {
-  return !virtual_mounts.empty() ? 1 : 0;
+  return sandbox_fs.Enabled() ? 1 : 0;
 }
 
 namespace {
-
-/*
- * Translates a path between host and virtual filesystems. The direction is
- * determined by the to_host flag.
- *
- * @param[in] src_path The source path (virtual if to_host is set, else host).
- * @param[out] dest_path The output path (host if to_host is set, else virtual).
- * @param[in] to_host True to translate virtual to host, false for backwards.
- * @param[out] writable Will contain whether this path is on a writable mount.
- * @return true on success, false if src_path matched no mount points.
- */
-bool TranslatePath(const string &src_path, string *dest_path,
-                   bool to_host, bool *writable) {
-  string ret = host_path;
-  vector<VirtualMount>::const_iterator it;
-  for (it = virtual_mounts.begin(); it != virtual_mounts.end(); ++it) {
-    const string &from = to_host ? it->virt_path : it->host_path;
-    const string &to = to_host ? it->host_path : it->virt_path;
-    if (ReplacePathPrefix(ret, from, to)) {
-      if (writable) {
-        *writable = it->is_writable;
-      }
-      return true;
-    }
-  }
-  return false;
-}
 
 
 /*
@@ -161,10 +225,11 @@ uint32_t CopyHostPathMounted(char *dest, size_t dest_max_size,
   CHECK(raw_path.length() < NACL_CONFIG_PATH_MAX);
 
   std::string resolved_path, host_path;
-  if (!RealPath(raw_path, &resolved_path)) {
-    return -NaClXlateErrno(errno);
+  int32_t retval = RealPath(sandbox_fs, raw_path, &resolved_path);
+  if (retval != 0) {
+    return retval;
   }
-  if (!TranslatePath(resolved_path, &host_path, true, is_writable)) {
+  if (!sandbox_fs.TranslatePath(resolved_path, &host_path, true, is_writable)) {
     return -NACL_ABI_EACCES;
   }
 
@@ -209,7 +274,7 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
   bool is_writable = false;
   uint32_t retval = CopyHostPathMounted(dest, dest_max_size, &is_writable);
   if (retval == 0 && req_writable && !is_writable) {
-    retval = -NACL_ABI_ACCESS;
+    retval = -NACL_ABI_EACCES;
   }
   return retval;
 }
@@ -222,7 +287,7 @@ uint32_t TranslateVirtualPath(const char *src_path, char *dest_path,
   if (NaClAclBypassChecks) {
     dest = src_path;
   } else {
-    if (!TranslatePath(src_path, &dest, to_host, NULL)) {
+    if (!sandbox_fs.TranslatePath(src_path, &dest, to_host, NULL)) {
       return -NACL_ABI_EACCES;
     }
   }

@@ -5,10 +5,11 @@
  */
 
 #include "native_client/src/trusted/service_runtime/filename_util.h"
+#include "native_client/src/trusted/service_runtime/include/sys/errno.h"
 
-#include <errno.h>
-#include <unistd.h>
-#include <sys/param.h>
+// TODO
+//#include <unistd.h>
+//#include <sys/param.h>
 
 #include <string>
 #include <vector>
@@ -16,11 +17,20 @@
 using std::vector;
 using std::string;
 
+/*
+ * MAXSYMLINKS defines the maximum number of symbolic links that may be
+ * expanded in a path name. It should be set high enough to allow all
+ * legitimate uses, but halt infinite loops reasonably quickly. It should
+ * possibly be defined in nacl_config.h instead, but this is currently the only
+ * file that uses it.
+ */
+#define NACL_FILEUTIL_MAXSYMLINKS     32
+
 // TODO: In the context of sel_ldr, the important things are that ReadLink
 // below interprets path as virtual, and returns link_path to be interpreted as
 // virtual; and that getcwd() returns an absolute virtual path.
 
-namespace {
+namespace nacl_filename_util {
 
 string SEP = "/";
 string CURDIR = ".";
@@ -31,6 +41,7 @@ string PARDIR = "..";
 //int32_t NaClSysGetcwd(struct NaClAppThread *natp, buffer, len);
 //int32_t NaClSysReadlink(struct NaClAppThread *natp, uint32_t path,
 //                        uint32_t buffer, uint32_t buffer_size);
+/*
 bool GetCurrentDir(string *path) {
   char buf[MAXPATHLEN];
   char *ret = getcwd(buf, MAXPATHLEN);
@@ -46,6 +57,7 @@ bool ReadLink(const string &path, string *link_path) {
   link_path->assign(buf, n);
   return true;
 }
+*/
 
 
 /*
@@ -97,7 +109,7 @@ bool StartsWithPath(const string &path, const string &path_prefix) {
 bool ReplacePathPrefix(string *path,
                        const string &prefix, const string &repl) {
   if (StartsWithPath(*path, prefix)) {
-    path->assign(JoinComponents(repl, path->substr(path_prefix.length())));
+    path->assign(JoinComponents(repl, path->substr(prefix.length())));
     return true;
   } else {
     return false;
@@ -150,22 +162,25 @@ string RemoveLastComponent(string *path) {
  * Implements both RealPath and AbsPath. The only difference is whether
  * it follows symlinks.
  */
-bool RealPathImpl(string path, string *resolved_path, bool resolve_links) {
-
-  // Ensure that we start with an absolute path (i.e. add cwd if relative).
-  if (!IsAbsolute(path)) {
-    string cwd;
-    if (!GetCurrentDir(&cwd)) {
-      return false;
-    }
-    path = JoinComponents(cwd, path);
-  }
+int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
+                     bool resolve_links) {
+  int32_t retval = 0;
 
   // The invariants below are:
   // - done is an absolute path with all symlinks resolved.
   // - rest is relative to done (even if it starts with a slash).
   string done = SEP, rest = path;
-  size_t resolved_path = 0;
+  size_t link_count = 0;
+
+  // Ensure that we start with an absolute path (i.e. add cwd if relative).
+  if (!IsAbsolute(rest)) {
+    string cwd;
+    retval = fs.Getcwd(&cwd);
+    if (retval != 0) {
+      return retval;
+    }
+    rest = JoinComponents(cwd, rest);
+  }
 
   while (!rest.empty()) {
     string head = RemoveFirstComponent(&rest);
@@ -179,37 +194,37 @@ bool RealPathImpl(string path, string *resolved_path, bool resolve_links) {
     } else if (resolve_links) {
       string new_path = JoinComponents(done, head);
       string link_path;
-      if (ReadLink(new_path, &link_path)) {
+      retval = fs.Readlink(new_path, &link_path);
+      if (retval == 0) {
         // Protect against infinite links.
-        if (++link_path > MAXSYMLINKS) {
-          errno = ELOOP;
-          return false;
+        if (++link_count > NACL_FILEUTIL_MAXSYMLINKS) {
+          return -NACL_ABI_ELOOP;
         }
         if (IsAbsolute(link_path)) {
           done = SEP;
         }
         rest = JoinComponents(link_path, rest);
-      } else {
+      } else if (retval == -NACL_ABI_EINVAL) {
         // EINVAL is the common case when the file exists but isn't a symlink.
-        if (errno != EINVAL) {
-          return false;
-        }
         done = new_path;
+      } else {
+        // Some actual error reading new_path.
+        return retval;
       }
     } else {
       done = JoinComponents(done, head);
     }
   }
   *resolved_path = done;
-  return true;
+  return 0;
 }
 
+int32_t AbsPath(const FS &fs, const string &path, string *resolved_path) {
+  return nacl_filename_util::RealPathImpl(fs, path, resolved_path, false);
 }
 
-bool AbsPath(string path, string *resolved_path) {
-  return RealPath(path, resolved_path, false);
+int32_t RealPath(const FS &fs, const string &path, string *resolved_path) {
+  return nacl_filename_util::RealPathImpl(fs, path, resolved_path, true);
 }
 
-bool RealPath(string path, string *resolved_path) {
-  return RealPath(path, resolved_path, true);
 }

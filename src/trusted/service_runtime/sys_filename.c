@@ -268,7 +268,9 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
   }
 
   size_t path_len = strlen(path);
-  if (path_len + 1 > len) {
+  if (len <= 0) {
+    return -NACL_ABI_EINVAL;
+  } else if (path_len + 1 > (size_t)len) {
     return -NACL_ABI_ERANGE;
   }
 

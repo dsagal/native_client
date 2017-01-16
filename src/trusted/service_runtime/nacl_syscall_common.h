@@ -50,6 +50,9 @@ void NaClInsecurelyBypassAllAclChecks(void);
 int NaClFileAccessEnabled(void);
 
 /* bool */
+int NaClMountsEnabled(void);
+
+/* bool */
 int NaClSysCommonAddrRangeContainsExecutablePages(struct NaClApp *nap,
                                                   uintptr_t usraddr,
                                                   size_t length);
