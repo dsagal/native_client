@@ -61,11 +61,14 @@ class FS {
 };
 
 bool StartsWith(const std::string &str, const std::string &prefix);
+bool StartsWith(const std::string &str, char prefix) ;
 bool EndsWith(const std::string &str, const std::string &suffix);
+bool EndsWith(const std::string &str, char suffix);
 bool IsAbsolute(const std::string &path);
 bool StartsWithPath(const std::string &path, const std::string &path_prefix);
 bool ReplacePathPrefix(std::string *path, const std::string &prefix,
                        const std::string &repl);
+void AppendComponent(std::string *path, const std::string &tail);
 std::string JoinComponents(const std::string &head, const std::string &tail);
 std::string RemoveLastComponent(std::string *path);
 std::string RemoveFirstComponent(std::string *path);

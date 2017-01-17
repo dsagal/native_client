@@ -7,10 +7,6 @@
 #include "native_client/src/trusted/service_runtime/filename_util.h"
 #include "native_client/src/trusted/service_runtime/include/sys/errno.h"
 
-// TODO
-//#include <unistd.h>
-//#include <sys/param.h>
-
 #include <string>
 #include <vector>
 
@@ -18,7 +14,7 @@ using std::vector;
 using std::string;
 
 /*
- * MAXSYMLINKS defines the maximum number of symbolic links that may be
+ * This defines the maximum number of symbolic links that may be
  * expanded in a path name. It should be set high enough to allow all
  * legitimate uses, but halt infinite loops reasonably quickly. It should
  * possibly be defined in nacl_config.h instead, but this is currently the only
@@ -26,39 +22,11 @@ using std::string;
  */
 #define NACL_FILEUTIL_MAXSYMLINKS     32
 
-// TODO: In the context of sel_ldr, the important things are that ReadLink
-// below interprets path as virtual, and returns link_path to be interpreted as
-// virtual; and that getcwd() returns an absolute virtual path.
-
 namespace nacl_filename_util {
 
-string SEP = "/";
+char SEP = '/';
 string CURDIR = ".";
 string PARDIR = "..";
-
-
-// TODO: getcwd and readlink should use proper calls in the virtual FS land.
-//int32_t NaClSysGetcwd(struct NaClAppThread *natp, buffer, len);
-//int32_t NaClSysReadlink(struct NaClAppThread *natp, uint32_t path,
-//                        uint32_t buffer, uint32_t buffer_size);
-/*
-bool GetCurrentDir(string *path) {
-  char buf[MAXPATHLEN];
-  char *ret = getcwd(buf, MAXPATHLEN);
-  if (!ret) { return false; }
-  path->assign(buf);
-  return true;
-}
-
-bool ReadLink(const string &path, string *link_path) {
-  char buf[MAXPATHLEN];
-  ssize_t n = Readlink(path.c_str(), buf, MAXPATHLEN);
-  if (n < 0) { return false; }
-  link_path->assign(buf, n);
-  return true;
-}
-*/
-
 
 /*
  * Returns true if str begins with prefix.
@@ -68,12 +36,26 @@ bool StartsWith(const string &str, const string &prefix) {
 }
 
 /*
+ * Returns true if str begins with the character prefix.
+ */
+bool StartsWith(const string &str, char prefix) {
+  return !str.empty() && str[0] == prefix;
+}
+
+/*
  * Returns true if str ends with suffix.
  */
 bool EndsWith(const string &str, const string &suffix) {
   if (str.size() < suffix.size()) { return false; }
   size_t index = str.size() - suffix.size();
   return str.find(suffix, index) == index;
+}
+
+/*
+ * Returns true if str ends with the character suffix.
+ */
+bool EndsWith(const string &str, char suffix) {
+  return !str.empty() && str[str.size() - 1] == suffix;
 }
 
 /*
@@ -93,9 +75,9 @@ bool IsAbsolute(const string &path) {
  */
 bool StartsWithPath(const string &path, const string &path_prefix) {
   return StartsWith(path, path_prefix) && (
-    path.length() == path_prefix.length() ||
+    path.size() == path_prefix.size() ||
     EndsWith(path_prefix, SEP) ||
-    path.substr(path_prefix.length(), 1) == SEP
+    path[path_prefix.size()] == SEP
   );
 }
 
@@ -109,10 +91,29 @@ bool StartsWithPath(const string &path, const string &path_prefix) {
 bool ReplacePathPrefix(string *path,
                        const string &prefix, const string &repl) {
   if (StartsWithPath(*path, prefix)) {
-    path->assign(JoinComponents(repl, path->substr(prefix.length())));
+    int repl_skip = EndsWith(repl, SEP) ? 1 : 0;
+    int prefix_skip = EndsWith(prefix, SEP) ? 1 : 0;
+    path->replace(0, prefix.size() - prefix_skip,
+                  repl, 0, repl.size() - repl_skip);
     return true;
+  }
+  return false;
+}
+
+/*
+ * Appends tail to path, joining the with a single "/".
+ */
+void AppendComponent(string *path, const string &tail) {
+  if (tail.empty()) {
+    return;
+  }
+  if (path->empty()) {
+    path->assign(tail);
   } else {
-    return false;
+    if (!EndsWith(*path, SEP)) {
+      path->push_back(SEP);
+    }
+    path->append(tail, StartsWith(tail, SEP) ? 1 : 0, string::npos);
   }
 }
 
@@ -121,10 +122,7 @@ bool ReplacePathPrefix(string *path,
  */
 string JoinComponents(const string &head, const string &tail) {
   string ret = head;
-  if (!EndsWith(head, SEP)) {
-    ret.append(SEP);
-  }
-  ret.append(tail, StartsWith(tail, SEP) ? SEP.size() : 0, string::npos);
+  AppendComponent(&ret, tail);
   return ret;
 }
 
@@ -134,11 +132,12 @@ string JoinComponents(const string &head, const string &tail) {
  */
 string RemoveFirstComponent(string *path) {
   size_t pos = path->find(SEP);
-  string ret = path->substr(0, pos);
+  string ret;
   if (pos == string::npos) {
-    path->clear();
+    path->swap(ret);
   } else {
-    path->erase(0, pos + SEP.size());
+    ret = path->substr(0, pos);
+    path->erase(0, pos + 1);
   }
   return ret;
 }
@@ -149,10 +148,11 @@ string RemoveFirstComponent(string *path) {
  */
 string RemoveLastComponent(string *path) {
   size_t pos = path->rfind(SEP);
-  string ret = path->substr(pos == string::npos ? 0 : pos + SEP.size());
+  string ret;
   if (pos == string::npos) {
-    path->clear();
+    path->swap(ret);
   } else {
+    ret = path->substr(pos + 1);
     path->erase(pos);
   }
   return ret;
@@ -167,9 +167,10 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
   int32_t retval = 0;
 
   // The invariants below are:
-  // - done is an absolute path with all symlinks resolved.
+  // - done is an absolute path with all symlinks resolved except possibly the
+  //   very last one (i.e. full path).
   // - rest is relative to done (even if it starts with a slash).
-  string done = SEP, rest = path;
+  string done, rest = path;
   size_t link_count = 0;
 
   // Ensure that we start with an absolute path (i.e. add cwd if relative).
@@ -182,6 +183,7 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
     rest = JoinComponents(cwd, rest);
   }
 
+  done = SEP;
   while (!rest.empty()) {
     string head = RemoveFirstComponent(&rest);
     if (head.empty() || head == CURDIR) {
@@ -191,28 +193,30 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
       if (done.empty()) {
         done = SEP;
       }
-    } else if (resolve_links) {
-      string new_path = JoinComponents(done, head);
-      string link_path;
-      retval = fs.Readlink(new_path, &link_path);
-      if (retval == 0) {
-        // Protect against infinite links.
-        if (++link_count > NACL_FILEUTIL_MAXSYMLINKS) {
-          return -NACL_ABI_ELOOP;
-        }
-        if (IsAbsolute(link_path)) {
-          done = SEP;
-        }
-        rest = JoinComponents(link_path, rest);
-      } else if (retval == -NACL_ABI_EINVAL) {
-        // EINVAL is the common case when the file exists but isn't a symlink.
-        done = new_path;
-      } else {
-        // Some actual error reading new_path.
-        return retval;
-      }
     } else {
-      done = JoinComponents(done, head);
+      AppendComponent(&done, head);
+
+      if (resolve_links) {
+        string link_path;
+        retval = fs.Readlink(done, &link_path);
+        if (retval == 0) {
+          // Protect against infinite links.
+          if (++link_count > NACL_FILEUTIL_MAXSYMLINKS) {
+            return -NACL_ABI_ELOOP;
+          }
+          if (IsAbsolute(link_path)) {
+            done = SEP;
+          } else {
+            RemoveLastComponent(&done);
+          }
+          rest = JoinComponents(link_path, rest);
+        } else if (retval == -NACL_ABI_EINVAL) {
+          // EINVAL is the common case when the file exists but isn't a symlink.
+        } else {
+          // Some actual error reading new_path.
+          return retval;
+        }
+      }
     }
   }
   *resolved_path = done;
