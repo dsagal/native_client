@@ -25,111 +25,14 @@
 using std::vector;
 using std::string;
 using nacl_filename_util::IsAbsolute;
-using nacl_filename_util::ReplacePathPrefix;
 using nacl_filename_util::AbsPath;
 using nacl_filename_util::RealPath;
+using nacl_filename_util::SandboxFS;
+using nacl_filename_util::CreateSandboxFS;
 
-class SandboxFS : public nacl_filename_util::FS {
-  private:
-    struct VirtualMount {
-      string host_path;
-      string virt_path;
-      bool is_writable;
-    };
-
-    // These are stored sorted by the decreasing length of virt_path. This
-    // ensures that we match the longest virtual prefix first. Note that the
-    // same order is appropriate for both directions of translation.
-    vector<VirtualMount> virtual_mounts_;
-
-  public:
-
-    bool Enabled() const {
-      return !virtual_mounts_.empty();
-    }
-
-    void AddMount(string host_path, string virt_path, bool is_writable) {
-      VirtualMount mount;
-      mount.host_path = host_path;
-      mount.virt_path = virt_path;
-      mount.is_writable = is_writable;
-
-      // Find the insert position, sorted by decreasing length of virt_path.
-      vector<VirtualMount>::iterator it;
-      for (it = virtual_mounts_.begin(); it != virtual_mounts_.end(); ++it) {
-        if (it->virt_path.length() < mount.virt_path.length()) {
-          break;
-        }
-      }
-      virtual_mounts_.insert(it, mount);
-    }
-
-    /*
-     * Translates a path between host and virtual filesystems. The direction is
-     * determined by the to_host flag.
-     *
-     * @param[in] src_path The source path (virtual if to_host is set, else host).
-     * @param[out] dest_path The output path (host if to_host is set, else virtual).
-     * @param[in] to_host True to translate virtual to host, false for backwards.
-     * @param[out] writable Will contain whether this path is on a writable mount.
-     * @return true on success, false if src_path matched no mount points.
-     */
-    bool TranslatePath(const string &src_path, string *dest_path,
-                       bool to_host, bool *writable) const {
-      dest_path->assign(src_path);
-      vector<VirtualMount>::const_iterator it;
-      for (it = virtual_mounts_.begin(); it != virtual_mounts_.end(); ++it) {
-        const string &from = to_host ? it->virt_path : it->host_path;
-        const string &to = to_host ? it->host_path : it->virt_path;
-        if (ReplacePathPrefix(dest_path, from, to)) {
-          if (writable) {
-            *writable = it->is_writable;
-          }
-          return true;
-        }
-      }
-      return false;
-    }
-
-    // These methods return 0 on success, else a negated NaCl errno.
-    int32_t Getcwd(std::string *path) const {
-      char buf[NACL_CONFIG_PATH_MAX] = "";
-      int32_t retval = NaClHostDescGetcwd(buf, sizeof buf);
-      if (retval != 0) {
-        return retval;
-      }
-      string host_path(buf);
-      if (!TranslatePath(host_path, path, false, NULL)) {
-        return -NACL_ABI_EACCES;
-      }
-      return 0;
-    }
-
-    int32_t Readlink(const std::string &path, std::string *link_path) const {
-      string host_path;
-      if (!TranslatePath(path, &host_path, true, NULL)) {
-        return -NACL_ABI_EACCES;
-      }
-      char buf[NACL_CONFIG_PATH_MAX] = "";
-      int32_t retval = NaClHostDescReadlink(host_path.c_str(), buf, sizeof buf);
-      if (retval < 0) {
-        return retval;
-      }
-      // A positive value is the number of characters placed into buf (with no
-      // terminating null). If it filled the buffer, treat it as truncation.
-      if ((uint32_t)retval >= sizeof buf) {
-        return -NACL_ABI_ENAMETOOLONG;
-      }
-      // Note that symlink target is always interpreted as a virtual path, and
-      // we do not translate it. Reliable translation isn't trivial because the
-      // path may not be normalized. For symlinks that need to work in both
-      // host and virtual OS, use relative paths.
-      link_path->assign(buf, retval);
-      return 0;
-    }
-};
-
-SandboxFS sandbox_fs;
+namespace {
+  SandboxFS *sandbox_fs = NULL;
+}
 
 
 // Note that when storing paths, we store them as absolute normalized paths, to
@@ -147,31 +50,41 @@ int NaClAddMount(const char *mount_spec) {
   // Parse the "<host-dir>:<virt-dir>:[ro|rw]" spec.
   size_t colon2 = spec.rfind(":");
   if (colon2 == string::npos || colon2 == 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: Invalid -m mount spec");
+    NaClLog(LOG_ERROR, "NaClAddMount: Invalid -m mount spec\n");
     return 0;
   }
   string options = spec.substr(colon2 + 1);
   if (options != "ro" && options != "rw") {
-    NaClLog(LOG_ERROR, "NaClAddMount: -m mount option must be 'ro' or 'rw'");
+    NaClLog(LOG_ERROR, "NaClAddMount: -m mount option must be 'ro' or 'rw'\n");
     return 0;
   }
 
   size_t colon1 = spec.rfind(":", colon2 - 1);
   if (colon1 == string::npos || colon1 == 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: Invalid -m mount spec");
+    NaClLog(LOG_ERROR, "NaClAddMount: Invalid -m mount spec\n");
     return 0;
   }
   string virt_path = spec.substr(colon1 + 1, colon2 - colon1 - 1);
 
   if (!IsAbsolute(virt_path)) {
-    NaClLog(LOG_ERROR, "NaClAddMount: -m mount path must be absolute");
+    NaClLog(LOG_ERROR, "NaClAddMount: -m mount path must be absolute\n");
     return 0;
   }
+
+  // Create the global SandboxFS which we'll use for path translation.
+  if (!sandbox_fs) {
+    sandbox_fs = CreateSandboxFS();
+    if (!sandbox_fs) {
+      NaClLog(LOG_ERROR, "NaClAddMount: error creating SandboxFS for -m\n");
+      return 0;
+    }
+  }
+
   // Calling AbsPath() normalizes the path, ensuring it contains no . .. or //.
   string abs_virt;
-  int32_t retval = AbsPath(sandbox_fs, virt_path, &abs_virt);
+  int32_t retval = AbsPath(*sandbox_fs, virt_path, &abs_virt);
   if (retval != 0) {
-    NaClLog(LOG_ERROR, "NaClAddMount: error normalizing -m mount path");
+    NaClLog(LOG_ERROR, "NaClAddMount: error normalizing -m mount path\n");
     return 0;
   }
 
@@ -187,62 +100,51 @@ int NaClAddMount(const char *mount_spec) {
       0 != NaClHostDescChdir(host_path.c_str()) ||
       0 != NaClHostDescGetcwd(abs_host, sizeof abs_host) ||
       0 != NaClHostDescChdir(cwd_orig)) {
-    NaClLog(LOG_ERROR, "NaClAddMount: error testing -m host directory");
+    NaClLog(LOG_ERROR, "NaClAddMount: error testing -m host directory\n");
     return 0;
   }
 
-  sandbox_fs.AddMount(abs_host, abs_virt, options == "rw");
+  sandbox_fs->AddMount(abs_host, abs_virt, options == "rw");
   return 1;
 }
 
+
 int NaClMountsEnabled() {
-  return sandbox_fs.Enabled() ? 1 : 0;
+  return sandbox_fs->Enabled() ? 1 : 0;
 }
 
-namespace {
 
-
-/*
- * Transforms a raw file path from the user into an absolute path prefixed by
- * the mounted file system root (or leave it as a relative path). Also validates
- * the path to ensure it does not access anything outside the mount point.
- *
- * @param[in/out] dest The raw file path from the user.
- * @param[in] dest_max_size The size of the buffer holding dest.
- * @return 0 on success, else a NaCl errno.
- */
-uint32_t CopyHostPathMounted(char *dest, size_t dest_max_size,
-                             bool *is_writable) {
-  /* Transform the input C string into a std::string for easier manipulation. */
-  const std::string raw_path(dest);
-
-  if (raw_path.empty()) {
-    NaClLog(LOG_ERROR, "Dest cannot be empty path\n");
-    return -NACL_ABI_ENOENT;
+int32_t NaClSandboxGetcwd(char *buf, size_t buf_size) {
+  if (sandbox_fs) {
+    string cwd;
+    int32_t retval = sandbox_fs->Getcwd(&cwd);
+    if (retval != 0) {
+      return retval;
+    }
+    if (cwd.length() + 1 > buf_size) {
+      return -NACL_ABI_ENAMETOOLONG;
+    }
+    strncpy(buf, cwd.c_str(), cwd.length() + 1);
+    return 0;
+  } if (NaClAclBypassChecks) {
+    return NaClHostDescGetcwd(buf, buf_size);
   }
-
-  CHECK(dest_max_size == NACL_CONFIG_PATH_MAX);
-  CHECK(raw_path.length() < NACL_CONFIG_PATH_MAX);
-
-  std::string resolved_path, host_path;
-  int32_t retval = RealPath(sandbox_fs, raw_path, &resolved_path);
-  if (retval != 0) {
-    return retval;
-  }
-  if (!sandbox_fs.TranslatePath(resolved_path, &host_path, true, is_writable)) {
-    return -NACL_ABI_EACCES;
-  }
-
-  if (host_path.length() + 1 > dest_max_size) {
-    NaClLog(LOG_WARNING, "Pathname too long: %s\n", host_path.c_str());
-    return -NACL_ABI_ENAMETOOLONG;
-  }
-  /* Copy the C++ string into its C string destination. */
-  strcpy(dest, host_path.c_str()); //NOLINT
-  return 0;
+  return -NACL_ABI_EACCES;
 }
 
-}  // namespace
+int32_t NaClSandboxChdir(const char *path) {
+  if (sandbox_fs) {
+    string host_path;
+    int32_t retval = sandbox_fs->TranslateToHost(path, &host_path, NULL);
+    if (retval != 0) {
+      return retval;
+    }
+    return NaClHostDescChdir(host_path.c_str());
+  } else if (NaClAclBypassChecks) {
+    return NaClHostDescChdir(path);
+  }
+  return -NACL_ABI_EACCES;
+}
 
 
 uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
@@ -271,31 +173,31 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
   if (NaClAclBypassChecks) {
     return 0;
   }
-  bool is_writable = false;
-  uint32_t retval = CopyHostPathMounted(dest, dest_max_size, &is_writable);
-  if (retval == 0 && req_writable && !is_writable) {
-    retval = -NACL_ABI_EACCES;
-  }
-  return retval;
-}
 
+  /* Transform the input C string into a std::string for easier manipulation. */
+  const string sandbox_path(dest);
+  string resolved_path, host_path;
 
-uint32_t TranslateVirtualPath(const char *src_path, char *dest_path,
-                              size_t dest_max_size, int to_host) {
-  string dest;
+  int32_t retval = RealPath(*sandbox_fs, sandbox_path, &resolved_path);
+  if (retval == 0) {
+    bool is_writable = false;
+    if (!sandbox_fs->TranslateToHost(resolved_path, &host_path, &is_writable) ||
+        (req_writable && !is_writable)) {
 
-  if (NaClAclBypassChecks) {
-    dest = src_path;
-  } else {
-    if (!sandbox_fs.TranslatePath(src_path, &dest, to_host, NULL)) {
-      return -NACL_ABI_EACCES;
+      retval = -NACL_ABI_EACCES;
+
+    } else if (host_path.length() + 1 > dest_max_size) {
+      NaClLog(LOG_WARNING, "NaClSys: resolved pathname too long\n");
+      retval = -NACL_ABI_ENAMETOOLONG;
+
+    } else {
+      /* Copy the C++ string into its C string destination. */
+      strncpy(dest, host_path.c_str(), host_path.length() + 1);
+      return 0;
     }
   }
-
-  if (dest.length() + 1 > dest_max_size) {
-    return -NACL_ABI_ENAMETOOLONG;
-  }
-  /* Copy the C++ string into its C string destination. */
-  strcpy(dest_path, dest.c_str()); //NOLINT
-  return 0;
+  // Make sure we don't leave an unsafe path in *dest, in case any code
+  // (wrongly) uses *dest despite us returning an error.
+  dest[0] = '\0';
+  return retval;
 }

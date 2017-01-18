@@ -255,6 +255,12 @@ namespace {
     int32_t retval = nacl_filename_util::RealPath(fs, path, &result);
     return PathRet(retval, result);
   }
+
+  PathRet Getcwd(const FS &fs) {
+    string path;
+    int32_t retval = fs.Getcwd(&path);
+    return PathRet(retval, path);
+  }
 }
 
 
@@ -322,6 +328,7 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   fs.symlinks["/usr/var/link_up_up"] = "../../hello";
   fs.symlinks["/usr/var/link_abs"] = "/tmp/abs";
   fs.symlinks["/usr/var/link_rel"] = "test/./rel///";
+  fs.symlinks["/hello"] = "world";
 
   // Symlink-less tests.
   ASSERT_EQ(RealPath(fs, "/foo/bar/baz"),         PathRet(0, "/foo/bar/baz"));
@@ -336,6 +343,7 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   ASSERT_EQ(RealPath(fs, "../.."),                PathRet(0, "/"));
   ASSERT_EQ(RealPath(fs, "../..//"),              PathRet(0, "/"));
 
+  ASSERT_EQ(RealPath(fs, "/hello"),               PathRet(0, "/world"));
   ASSERT_EQ(RealPath(fs, "/tmp"),                 PathRet(0, "/usr/var/tmp"));
   ASSERT_EQ(RealPath(fs, "/./tmp//./"),           PathRet(0, "/usr/var/tmp"));
   ASSERT_EQ(RealPath(fs, "/var/tmp"),             PathRet(0, "/usr/var/tmp"));
@@ -347,8 +355,8 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   ASSERT_EQ(RealPath(fs, "/var/link_here2/"),     PathRet(0, "/usr/var/here"));
   ASSERT_EQ(RealPath(fs, "/var/link_up"),         PathRet(0, "/usr"));
   ASSERT_EQ(RealPath(fs, "/var/link_up/test/"),   PathRet(0, "/usr/test"));
-  ASSERT_EQ(RealPath(fs, "/var/link_up_up"),      PathRet(0, "/hello"));
-  ASSERT_EQ(RealPath(fs, "/var/link_up_up/test/"),PathRet(0, "/hello/test"));
+  ASSERT_EQ(RealPath(fs, "/var/link_up_up"),      PathRet(0, "/world"));
+  ASSERT_EQ(RealPath(fs, "/var/link_up_up/test/"),PathRet(0, "/world/test"));
   ASSERT_EQ(RealPath(fs, "/var/link_abs"),        PathRet(0, "/usr/var/tmp/abs"));
   ASSERT_EQ(RealPath(fs, "/var/link_abs/test/"),  PathRet(0, "/usr/var/tmp/abs/test"));
   ASSERT_EQ(RealPath(fs, "/var/link_rel"),        PathRet(0, "/usr/var/test/rel"));
@@ -360,8 +368,8 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   ASSERT_EQ(RealPath(fs, "link_here2/"),          PathRet(0, "/usr/var/here"));
   ASSERT_EQ(RealPath(fs, "link_up"),              PathRet(0, "/usr"));
   ASSERT_EQ(RealPath(fs, "link_up/test/"),        PathRet(0, "/usr/test"));
-  ASSERT_EQ(RealPath(fs, "link_up_up"),           PathRet(0, "/hello"));
-  ASSERT_EQ(RealPath(fs, "link_up_up/test/"),     PathRet(0, "/hello/test"));
+  ASSERT_EQ(RealPath(fs, "link_up_up"),           PathRet(0, "/world"));
+  ASSERT_EQ(RealPath(fs, "link_up_up/test/"),     PathRet(0, "/world/test"));
   ASSERT_EQ(RealPath(fs, "link_abs"),             PathRet(0, "/usr/var/tmp/abs"));
   ASSERT_EQ(RealPath(fs, "link_abs/test/"),       PathRet(0, "/usr/var/tmp/abs/test"));
   ASSERT_EQ(RealPath(fs, "link_rel"),             PathRet(0, "/usr/var/test/rel"));
@@ -390,4 +398,134 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   ASSERT_EQ(RealPath(fs, "/dangerX"),             PathRet(-NACL_ABI_EACCES, ""));
   ASSERT_EQ(RealPath(fs, "/foo/danger"),          PathRet(0, "/etc/password"));
   ASSERT_EQ(RealPath(fs, "/fooX/danger"),         PathRet(-NACL_ABI_EACCES, ""));
+}
+
+
+namespace {
+  using nacl_filename_util::SandboxFS;
+
+  typedef testing::tuple<bool, string, bool> TransRet;
+
+  TransRet ToHost(SandboxFS &sfs, string path) {
+    bool is_writable = false;
+    string dest;
+    bool retval = sfs.TranslateToHost(path, &dest, &is_writable);
+    return TransRet(retval, dest, is_writable);
+  }
+
+  TransRet FromHost(SandboxFS &sfs, string path) {
+    bool is_writable = false;
+    string dest;
+    bool retval = sfs.TranslateFromHost(path, &dest, &is_writable);
+    return TransRet(retval, dest, is_writable);
+  }
+}
+
+TEST_F(FilenameUtilTest, TestSandboxFSTranslate) {
+  using nacl_filename_util::SandboxFS;
+
+  MockFS host_fs;
+  host_fs.cwd = "/";
+
+  SandboxFS sfs(host_fs);
+  ASSERT_FALSE(sfs.Enabled());
+
+  sfs.AddMount("/HOST/TMP", "/tmp", true);
+  ASSERT_TRUE(sfs.Enabled());
+
+  ASSERT_EQ(ToHost(sfs, "/tmp"), TransRet(1, "/HOST/TMP", true));
+  ASSERT_EQ(ToHost(sfs, "/tmp/"), TransRet(1, "/HOST/TMP/", true));
+  ASSERT_EQ(FromHost(sfs, "/HOST/TMP"), TransRet(1, "/tmp", true));
+  ASSERT_EQ(FromHost(sfs, "/HOST/TMP/"), TransRet(1, "/tmp/", true));
+
+  // ToHost does not manipulate the path: it's not safe without RealPath.
+  ASSERT_EQ(ToHost(sfs, "/tmp/../asdf"), TransRet(1, "/HOST/TMP/../asdf", true));
+  ASSERT_EQ(FromHost(sfs, "/HOST/TMP/../asdf"), TransRet(1, "/tmp/../asdf", true));
+
+  // Test various paths that don't match the mapping.
+  ASSERT_EQ(ToHost(sfs, "/HOST/TMP/"), TransRet(0, "", false));
+  ASSERT_EQ(ToHost(sfs, "/foo/"), TransRet(0, "", false));
+  ASSERT_EQ(ToHost(sfs, "/"), TransRet(0, "", false));
+  ASSERT_EQ(ToHost(sfs, ""), TransRet(0, "", false));
+  ASSERT_EQ(ToHost(sfs, "tmp/"), TransRet(0, "", false));
+
+  ASSERT_EQ(FromHost(sfs, "/tmp/"), TransRet(0, "", false));
+  ASSERT_EQ(FromHost(sfs, "/foo/"), TransRet(0, "", false));
+  ASSERT_EQ(FromHost(sfs, "/"), TransRet(0, "", false));
+  ASSERT_EQ(FromHost(sfs, ""), TransRet(0, "", false));
+  ASSERT_EQ(FromHost(sfs, "tmp/"), TransRet(0, "", false));
+
+  // Test order of matching and the "is_writable" flag.
+  sfs.AddMount("/ROOT/",  "/",        false);
+  sfs.AddMount("/READ",   "/tmp/ro",  false);
+
+  ASSERT_EQ(ToHost(sfs, ""),            TransRet(0, "", false));
+  ASSERT_EQ(ToHost(sfs, "/"),           TransRet(1, "/ROOT/", false));
+  ASSERT_EQ(ToHost(sfs, "/foo"),        TransRet(1, "/ROOT/foo", false));
+  ASSERT_EQ(ToHost(sfs, "/tmp"),        TransRet(1, "/HOST/TMP", true));
+  ASSERT_EQ(ToHost(sfs, "/tmp/foo"),    TransRet(1, "/HOST/TMP/foo", true));
+  ASSERT_EQ(ToHost(sfs, "/foo/tmp"),    TransRet(1, "/ROOT/foo/tmp", false));
+  ASSERT_EQ(ToHost(sfs, "/tmp/ro"),     TransRet(1, "/READ", false));
+  ASSERT_EQ(ToHost(sfs, "/tmp/ro/"),    TransRet(1, "/READ/", false));
+  ASSERT_EQ(ToHost(sfs, "/tmp/ro/foo"), TransRet(1, "/READ/foo", false));
+}
+
+TEST_F(FilenameUtilTest, TestSandboxFSResolve) {
+  // Test symlinks and cwd, to ensure they are interpreted with SandboxFS.
+  using nacl_filename_util::SandboxFS;
+
+  MockFS host_fs;
+  host_fs.cwd = "/ROOT";
+
+  SandboxFS sfs(host_fs);
+  sfs.AddMount("/HOST/TMP", "/tmp", true);
+  sfs.AddMount("/ROOT",  "/",        false);
+  sfs.AddMount("/READ",   "/tmp/ro",  false);
+
+  host_fs.symlinks["/HOST/TMP/danger"] = "/etc/password";
+  host_fs.symlinks["/HOST/TMP/up"] = "..";
+  host_fs.symlinks["/HOST/TMP/up2"] = "../../";
+  host_fs.symlinks["/HOST/TMP/root"] = "/ROOT";
+  host_fs.symlinks["/HOST/TMP/root2"] = "../../ROOT///././";
+  host_fs.symlinks["/READ/ltmp"] = "/tmp/foo";
+  host_fs.symlinks["/READ/ltmp2"] = "/tmp/foo/../bar//foo";
+
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/danger"),     PathRet(0, "/etc/password"));
+  ASSERT_EQ(RealPath(sfs, "/etc/password"),   PathRet(0, "/etc/password"));
+  ASSERT_EQ(RealPath(sfs, "../etc/password"), PathRet(0, "/etc/password"));
+  ASSERT_EQ(RealPath(sfs, ".././.././/"),     PathRet(0, "/"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/up"),         PathRet(0, "/"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/up"),         PathRet(0, "/"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/up/x"),       PathRet(0, "/x"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/up2"),        PathRet(0, "/"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/up2/x"),      PathRet(0, "/x"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/root"),       PathRet(0, "/ROOT"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/root/x"),     PathRet(0, "/ROOT/x"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/root2"),      PathRet(0, "/ROOT"));
+  ASSERT_EQ(RealPath(sfs, "/tmp/root2/x"),    PathRet(0, "/ROOT/x"));
+  ASSERT_EQ(RealPath(sfs, "../tmp/ro/ltmp"),  PathRet(0, "/tmp/foo"));
+  ASSERT_EQ(RealPath(sfs, ".//tmp/ro/ltmp2"), PathRet(0, "/tmp/bar/foo"));
+
+  host_fs.cwd = "/HOST/TMP";
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp"));
+  host_fs.cwd = "/HOST/TMP/foo";
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/foo"));
+  host_fs.cwd = "/HOST/foo";
+  ASSERT_EQ(Getcwd(sfs), PathRet(-NACL_ABI_EACCES, ""));
+  host_fs.cwd = "/READ";
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/ro"));
+  host_fs.cwd = "/READ/foo";
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/ro/foo"));
+
+  host_fs.symlinks["/ROOT/private1"] = "./access";
+  host_fs.symlinks["/ROOT/private2"] = "./noaccessX";
+  host_fs.symlinks["/ROOT/privateX"] = "/etc/password";
+  host_fs.cwd = "/ROOT";
+  ASSERT_EQ(RealPath(sfs, "./private1"),     PathRet(0, "/access"));
+  ASSERT_EQ(RealPath(sfs, "./private1/foo"), PathRet(0, "/access/foo"));
+  ASSERT_EQ(RealPath(sfs, "./private2"),     PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(sfs, "./private2/foo"), PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(sfs, "./privateX"),     PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(sfs, "./privateX/foo"), PathRet(-NACL_ABI_EACCES, ""));
 }

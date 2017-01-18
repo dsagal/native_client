@@ -36,6 +36,35 @@ int NaClAddMount(const char *mount_spec);
  */
 int NaClMountsEnabled();
 
+
+/*
+ * Translates a path between host and virtual filesystems. The direction is
+ * determined by the to_host flag.
+ *
+ * @param[in] src_path The source path (virtual if to_host is set, else host).
+ * @param[out] dest_path The output path (host if to_host is set, else virtual).
+ * @param[in] dest_max_size The size of dest_path buffer.
+ * @param[in] to_host Non-zero to translate virtual to host, 0 for backwards.
+ * @return 0 on success, else a negated NaCl errno.
+ */
+uint32_t NaClMountPathTranslate(const char *src_path, char *dest_path,
+                                size_t dest_max_size, int to_host);
+
+
+/*
+ * Fills in the current working directory as a sandbox path.
+ * Changes working directory to the given sandbox path.
+ */
+int32_t NaClSandboxGetcwd(char *buf, size_t buf_size);
+
+
+/*
+ * Changes working directory to the given sandbox path.
+ * @return 0 on success, else a negated NaCl errno.
+ */
+int32_t NaClSandboxChdir(const char *path);
+
+
 /*
  * Given a file path at |src| from the user, copy the path into a buffer |dest|.
  *
@@ -55,19 +84,6 @@ int NaClMountsEnabled();
 uint32_t CopyHostPathInFromUser(struct NaClApp *nap, char *dest,
                                 size_t dest_max_size, uint32_t src,
                                 uint32_t req_writable);
-
-/*
- * Translates a path between host and virtual filesystems. The direction is
- * determined by the to_host flag.
- *
- * @param[in] src_path The source path (virtual if to_host is set, else host).
- * @param[out] dest_path The output path (host if to_host is set, else virtual).
- * @param[in] dest_max_size The size of dest_path buffer.
- * @param[in] to_host Non-zero to translate virtual to host, 0 for backwards.
- * @return 0 on success, else a negated NaCl errno.
- */
-uint32_t TranslateVirtualPath(const char *src_path, char *dest_path,
-                              size_t dest_max_size, int to_host);
 
 
 EXTERN_C_END

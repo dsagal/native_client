@@ -501,18 +501,6 @@ static int ProcessMounts(struct MountSpec *list) {
   return 1;
 }
 
-/*
- * Changes working directory to the given virtual path, returning 0 on success.
- */
-static int32_t ChdirVirtualPath(const char *virt_path) {
-  char host_path[NACL_CONFIG_PATH_MAX] = "";
-  int32_t retval = TranslateVirtualPath(virt_path, host_path, sizeof host_path, true);
-  if (retval != 0) {
-    return retval;
-  }
-  return NaClHostDescChdir(host_path);
-}
-
 
 int NaClSelLdrMain(int argc, char **argv) {
   struct NaClApp                *nap = NULL;
@@ -752,7 +740,7 @@ int NaClSelLdrMain(int argc, char **argv) {
    * directory. This is required for safety, because we allow relative
    * pathnames.
    */
-  if (NaClMountsEnabled() && ChdirVirtualPath("/")) {
+  if (NaClMountsEnabled() && NaClSandboxChdir("/")) {
     NaClLog(LOG_FATAL, "Could not change directory to root dir\n");
   }
 

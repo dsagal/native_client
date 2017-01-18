@@ -242,35 +242,23 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
   // when using subdirectory mounts, but it doesn't allow for fchdir().
   struct NaClApp *nap = natp->nap;
   int32_t        retval = -NACL_ABI_EINVAL;
-  char           host_path[NACL_CONFIG_PATH_MAX];
-  char           virt_path[NACL_CONFIG_PATH_MAX];
-  char           *path = NULL;
+  char           path[NACL_CONFIG_PATH_MAX];
 
   if (!NaClFileAccessEnabled()) {
     return -NACL_ABI_EACCES;
   }
 
-  retval = NaClHostDescGetcwd(host_path, NACL_CONFIG_PATH_MAX);
+  if (len <= 0) {
+    return -NACL_ABI_EINVAL;
+  }
+
+  retval = NaClSandboxGetcwd(path, NACL_CONFIG_PATH_MAX);
   if (retval != 0) {
     return retval;
   }
 
-  /* Check if we need to perform any path sanitization. */
-  if (NaClAclBypassChecks) {
-    path = host_path;
-  } else {
-    retval = TranslateVirtualPath(host_path, virt_path, NACL_CONFIG_PATH_MAX,
-                                  false);
-    if (retval != 0) {
-      return retval;
-    }
-    path = virt_path;
-  }
-
   size_t path_len = strlen(path);
-  if (len <= 0) {
-    return -NACL_ABI_EINVAL;
-  } else if (path_len + 1 > (size_t)len) {
+  if (path_len + 1 > (size_t)len) {
     return -NACL_ABI_ERANGE;
   }
 

@@ -97,6 +97,74 @@ int32_t AbsPath(const FS &fs, const std::string &path,
 int32_t RealPath(const FS &fs, const std::string &path,
                  std::string *resolved_path);
 
+
+/**
+ * Implements the translation of paths between the sandbox and host
+ * filesystems, as required for the -m option.
+ */
+class SandboxFS : public FS {
+  public:
+    /*
+     * The host FS implementation is taken as parameter, to allow test mocks.
+     */
+    SandboxFS(const FS &host_fs) : host_fs_(host_fs) {}
+
+    /*
+     * Return whether any translation is enabled.
+     */
+    bool Enabled() const {
+      return !virtual_mounts_.empty();
+    }
+
+    /*
+     * Adds a mount point.
+     */
+    void AddMount(std::string host_path, std::string virt_path,
+                  bool is_writable);
+
+    /*
+     * Translates a sandbox path to a host path, filling in *is_writable flag
+     * (when not NULL). Returns true on success, false if there is no mapping.
+     */
+    bool TranslateToHost(const std::string &virt_path, std::string *host_path,
+                         bool *is_writable) const;
+
+    /*
+     * Translates a host path to a sandbox path, filling in *is_writable flag
+     * (when not NULL). Returns true on success, false if there is no mapping.
+     */
+    bool TranslateFromHost(const std::string &host_path, std::string *virt_path,
+                           bool *is_writable) const;
+
+    int32_t Getcwd(std::string *path) const;
+    int32_t Readlink(const std::string &path,
+                              std::string *link_path) const;
+
+  private:
+    bool TranslatePathImpl(const std::string &src_path, std::string *dest_path,
+                           bool to_host, bool *writable) const;
+
+    // The underlying host filesystem.
+    const FS &host_fs_;
+
+    struct VirtualMount {
+      std::string host_path;
+      std::string virt_path;
+      bool is_writable;
+    };
+
+    // These are stored sorted by the decreasing length of virt_path. This
+    // ensures that we match the longest virtual prefix first. Note that the
+    // same order is appropriate for both directions of translation.
+    std::vector<VirtualMount> virtual_mounts_;
+};
+
+/*
+ * Creates and returns a SandboxFS object to use for translating paths between
+ * the sandbox and host filesystems, as required for the -m option.
+ */
+SandboxFS *CreateSandboxFS();
+
 }
 
 #endif /* NATIVE_CLIENT_SRC_TRUSTED_SERVICE_RUNTIME_FILENAME_UTIL_H_ */
