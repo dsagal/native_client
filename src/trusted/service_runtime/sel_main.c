@@ -47,6 +47,7 @@
 #include "native_client/src/trusted/service_runtime/nacl_valgrind_hooks.h"
 #include "native_client/src/trusted/service_runtime/osx/mach_exception_handler.h"
 #include "native_client/src/trusted/service_runtime/sel_ldr.h"
+#include "native_client/src/trusted/service_runtime/sel_ldr_filename.h"
 #include "native_client/src/trusted/service_runtime/sel_main_common.h"
 #include "native_client/src/trusted/service_runtime/sel_qualify.h"
 #include "native_client/src/trusted/service_runtime/win/exception_patch/ntdll_patch.h"
@@ -353,7 +354,7 @@ static void NaClSelLdrParseArgs(int argc, char **argv,
         break;
       case 'm':
         /* Add a mount spec to the linked list of them. */
-        mount_spec = malloc(sizeof MountSpec);
+        mount_spec = malloc(sizeof(struct MountSpec));
         if (NULL == mount_spec) {
           fprintf(stderr, "No memory for mount list\n");
           exit(1);
@@ -504,8 +505,8 @@ static int ProcessMounts(struct MountSpec *list) {
  * Changes working directory to the given virtual path, returning 0 on success.
  */
 static int32_t ChdirVirtualPath(const char *virt_path) {
-  char host_path[MAXPATHLEN];
-  int32_t retval = TranslateVirtualPath("/", host_path, sizeof host_path, true);
+  char host_path[NACL_CONFIG_PATH_MAX] = "";
+  int32_t retval = TranslateVirtualPath(virt_path, host_path, sizeof host_path, true);
   if (retval != 0) {
     return retval;
   }

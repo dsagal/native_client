@@ -77,7 +77,8 @@ bool StartsWithPath(const string &path, const string &path_prefix) {
   return StartsWith(path, path_prefix) && (
     path.size() == path_prefix.size() ||
     EndsWith(path_prefix, SEP) ||
-    path[path_prefix.size()] == SEP
+    path[path_prefix.size()] == SEP ||
+    path_prefix.empty()
   );
 }
 
@@ -91,10 +92,7 @@ bool StartsWithPath(const string &path, const string &path_prefix) {
 bool ReplacePathPrefix(string *path,
                        const string &prefix, const string &repl) {
   if (StartsWithPath(*path, prefix)) {
-    int repl_skip = EndsWith(repl, SEP) ? 1 : 0;
-    int prefix_skip = EndsWith(prefix, SEP) ? 1 : 0;
-    path->replace(0, prefix.size() - prefix_skip,
-                  repl, 0, repl.size() - repl_skip);
+    path->assign(JoinComponents(repl, path->substr(prefix.size())));
     return true;
   }
   return false;
@@ -210,10 +208,13 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
             RemoveLastComponent(&done);
           }
           rest = JoinComponents(link_path, rest);
-        } else if (retval == -NACL_ABI_EINVAL) {
+        } else if (retval == -NACL_ABI_EINVAL || retval == -NACL_ABI_ENOENT) {
           // EINVAL is the common case when the file exists but isn't a symlink.
+          // ENOENT is a non-existent path.
         } else {
-          // Some actual error reading new_path.
+          // Some actual error reading new_path. We fail here to ensure the
+          // resulting path has no symlinks (it would be exploitable to leave a
+          // symlink with insufficient permissions, for example).
           return retval;
         }
       }

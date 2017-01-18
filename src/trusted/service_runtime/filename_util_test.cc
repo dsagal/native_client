@@ -6,12 +6,17 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 #include "native_client/src/trusted/service_runtime/filename_util.h"
+#include "native_client/src/trusted/service_runtime/include/sys/errno.h"
 
 #include "gtest/gtest.h"
 
 using std::string;
+using std::map;
+using std::pair;
+using std::make_pair;
 
 class FilenameUtilTest : public testing::Test {
 };
@@ -82,6 +87,15 @@ TEST_F(FilenameUtilTest, TestStartsWithPath) {
   ASSERT_FALSE(StartsWithPath("foo/bar/", "foo/bar//"));
 }
 
+namespace {
+  typedef pair<bool, string> ReplRet;
+
+  ReplRet ReplacePathPrefix(string path, string prefix, string repl) {
+    bool ret = nacl_filename_util::ReplacePathPrefix(&path, prefix, repl);
+    return ReplRet(ret, path);
+  }
+}
+
 
 void assertReplacePathPrefix(string path, string prefix, string repl,
                              bool expected_return, string expected_result) {
@@ -92,14 +106,31 @@ void assertReplacePathPrefix(string path, string prefix, string repl,
 }
 
 TEST_F(FilenameUtilTest, TestReplacePathPrefix) {
-  // TODO Add more cases.
-  assertReplacePathPrefix("/foo/bar", "/foo/", "/FOO",  true, "/FOO/bar");
-  assertReplacePathPrefix("/foo/bar", "/foo/", "/FOO/", true, "/FOO/bar");
-  assertReplacePathPrefix("/foo/bar", "/foo",  "/FOO",  true, "/FOO/bar");
-  assertReplacePathPrefix("/foo/bar", "/foo",  "/FOO/", true, "/FOO/bar");
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo/", "/FOO"),      ReplRet(true, "/FOO/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo/", "/FOO/"),     ReplRet(true, "/FOO/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo",  "/FOO"),      ReplRet(true, "/FOO/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo",  "/FOO/"),     ReplRet(true, "/FOO/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo/bar", "/FOO"), ReplRet(true, "/FOO"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo/bar", "/"),    ReplRet(true, "/"));
 
-  assertReplacePathPrefix("/foo/bar", "/f",         "/FOO",  false, "/foo/bar");
-  assertReplacePathPrefix("/foo/bar", "/foo/bar/",  "/FOO",  false, "/foo/bar");
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/f",        "/FOO"), ReplRet(false, "/foo/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/foo/bar/", "/FOO"), ReplRet(false, "/foo/bar"));
+
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/",  "/FOO/BAR"), ReplRet(true, "/FOO/BAR/foo/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/",  "FOO/BAR/"), ReplRet(true, "FOO/BAR/foo/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/",    ""),       ReplRet(true, "foo/bar"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "/",    "."),      ReplRet(true, "./foo/bar"));
+  ASSERT_EQ(ReplacePathPrefix("foo/bar",  "foo",  "/"),      ReplRet(true, "/bar"));
+  ASSERT_EQ(ReplacePathPrefix("foo/bar",  "foo",  "."),      ReplRet(true, "./bar"));
+  ASSERT_EQ(ReplacePathPrefix("foo/bar",  "foo/", "."),      ReplRet(true, "./bar"));
+  ASSERT_EQ(ReplacePathPrefix("/",        "/",    "/asdf"),  ReplRet(true, "/asdf"));
+  ASSERT_EQ(ReplacePathPrefix("",         "/",    "/"),      ReplRet(false, ""));
+  ASSERT_EQ(ReplacePathPrefix("/asd/f",  "/asdf", "/"),      ReplRet(false, "/asd/f"));
+  ASSERT_EQ(ReplacePathPrefix("/asdf/x", "/asdf", "/"),      ReplRet(true, "/x"));
+  ASSERT_EQ(ReplacePathPrefix("/asdf/",  "/asdf", "/"),      ReplRet(true, "/"));
+  ASSERT_EQ(ReplacePathPrefix("/asdf",   "/asdf", "/"),      ReplRet(true, "/"));
+  ASSERT_EQ(ReplacePathPrefix("/foo/bar", "",     "/"),      ReplRet(true, "/foo/bar"));
+  ASSERT_EQ(ReplacePathPrefix("foo/bar",  "",     "/"),      ReplRet(true, "/foo/bar"));
 }
 
 TEST_F(FilenameUtilTest, TestAppendComponent) {
@@ -176,51 +207,187 @@ TEST_F(FilenameUtilTest, TestRemoveLastComponent) {
   assertRemoveLastComponent("",          "",          "");
 }
 
-/*
-void CheckCanonical(const std::string &abs_path, const std::string &goal_path,
-                    const std::vector<std::string> &goal_subpaths) {
-  std::string real_path;
-  std::vector<std::string> required_subpaths;
-  CanonicalizeAbsolutePath(abs_path, &real_path, &required_subpaths);
-  ASSERT_STREQ(goal_path.c_str(), real_path.c_str());
-  ASSERT_EQ(goal_subpaths.size(), required_subpaths.size());
-  for (size_t i = 0; i != goal_subpaths.size(); i++) {
-    ASSERT_STREQ(goal_subpaths[i].c_str(), required_subpaths[i].c_str());
+namespace {
+  using nacl_filename_util::FS;
+
+  // A mock filesystem implementation for testing.
+  // Current working directory can be set by setting mockFS.cwd directly.
+  // Symlinks are added by adding strings to the symlinks map.
+  // Paths that contain "N" are considered nonexistent, those with "X" produces
+  // EACCES, everything else is assumed to exist.
+  class MockFS : public FS {
+    public:
+      string cwd;
+      map<string, string> symlinks;
+
+      virtual int32_t Getcwd(string *path) const {
+        *path = cwd;
+        return 0;
+      }
+
+      virtual int32_t Readlink(const string &path, string *link_path) const {
+        if (path.find("N") != string::npos) {
+          return -NACL_ABI_ENOENT;
+        }
+        if (path.find("X") != string::npos) {
+          return -NACL_ABI_EACCES;
+        }
+        map<string, string>::const_iterator it = symlinks.find(path);
+        if (it == symlinks.end()) {
+          return -NACL_ABI_EINVAL;
+        } else {
+          *link_path = it->second;
+          return 0;
+        }
+      }
+  };
+
+  typedef pair<int32_t, string> PathRet;
+
+  PathRet AbsPath(const FS &fs, string path) {
+    string result;
+    int32_t retval = nacl_filename_util::AbsPath(fs, path, &result);
+    return PathRet(retval, result);
+  }
+
+  PathRet RealPath(const FS &fs, string path) {
+    string result;
+    int32_t retval = nacl_filename_util::RealPath(fs, path, &result);
+    return PathRet(retval, result);
   }
 }
 
-TEST_F(SelLdrFilesTest, TestModifiedRoot) {
-  std::vector<std::string> goal_subpaths;
-  goal_subpaths.clear();
-  CheckCanonical("/foo", "/foo", goal_subpaths);
-  CheckCanonical("/foo/", "/foo/", goal_subpaths);
-  CheckCanonical("/foo/.", "/foo/", goal_subpaths);
-  CheckCanonical("/foo/bar", "/foo/bar", goal_subpaths);
 
-  CheckCanonical("//.", "/", goal_subpaths);
-  CheckCanonical("///////", "/", goal_subpaths);
-  CheckCanonical("//././/.////.///.././", "/", goal_subpaths);
+TEST_F(FilenameUtilTest, TestAbsPath) {
+  MockFS fs;
+  fs.cwd = "/";
+  ASSERT_EQ(AbsPath(fs, "/foo/bar/baz"),          PathRet(0, "/foo/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, "foo/bar/baz"),           PathRet(0, "/foo/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, "foo/..//./bar/./baz/"),  PathRet(0, "/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, ""),                      PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "///"),                   PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "."),                     PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "../.."),                 PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "../..//"),               PathRet(0, "/"));
 
-  CheckCanonical("/../foo", "/foo", goal_subpaths);
-  CheckCanonical("/..foo/", "/..foo/", goal_subpaths);
-  CheckCanonical("/.foo/", "/.foo/", goal_subpaths);
+  // Existence of files doesn't affect AbsPath.
+  ASSERT_EQ(AbsPath(fs, "fooN/barN/bazN"),        PathRet(0, "/fooN/barN/bazN"));
 
-  std::string tmp_foo[] = {"/foo/"};
-  goal_subpaths.assign(tmp_foo, tmp_foo + 1);
-  CheckCanonical("/foo/../bar", "/bar", goal_subpaths);
-  CheckCanonical("/foo/..", "/", goal_subpaths);
-  CheckCanonical("/../foo/.././bar/./", "/bar/", goal_subpaths);
+  fs.cwd = "/hello/world";
+  ASSERT_EQ(AbsPath(fs, "/foo/bar/baz"),          PathRet(0, "/foo/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, "foo/bar/baz"),           PathRet(0, "/hello/world/foo/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, "foo/..//./bar/./baz/"),  PathRet(0, "/hello/world/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, ""),                      PathRet(0, "/hello/world"));
+  ASSERT_EQ(AbsPath(fs, "///"),                   PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "."),                     PathRet(0, "/hello/world"));
+  ASSERT_EQ(AbsPath(fs, ".."),                    PathRet(0, "/hello"));
+  ASSERT_EQ(AbsPath(fs, "../"),                   PathRet(0, "/hello"));
+  ASSERT_EQ(AbsPath(fs, "/.."),                   PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "../.."),                 PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "../..//"),               PathRet(0, "/"));
 
-  std::string tmp_bar_foo[] = {"/bar/foo/"};
-  goal_subpaths.assign(tmp_bar_foo, tmp_bar_foo + 1);
-  CheckCanonical("/bar/foo/..", "/bar", goal_subpaths);
+  // Symlinks don't matter for AbsPath.
+  fs.symlinks["/foo"] = "/hello";
+  ASSERT_EQ(AbsPath(fs, "/foo/bar/baz/"),         PathRet(0, "/foo/bar/baz"));
 
-  std::string tmp_foo_bar[] = {"/..foo/bar/"};
-  goal_subpaths.assign(tmp_foo_bar, tmp_foo_bar + 1);
-  CheckCanonical("/..foo/bar/..", "/..foo", goal_subpaths);
-
-  std::string tmp_foo_and_bar[] = {"/foo/", "/bar/"};
-  goal_subpaths.assign(tmp_foo_and_bar, tmp_foo_and_bar + 2);
-  CheckCanonical("/foo/../bar/..", "/", goal_subpaths);
+  // Test cases from earlier tests for CheckCanonical.
+  ASSERT_EQ(AbsPath(fs, "/foo"),                  PathRet(0, "/foo"));
+  ASSERT_EQ(AbsPath(fs, "/foo/"),                 PathRet(0, "/foo"));
+  ASSERT_EQ(AbsPath(fs, "/foo/."),                PathRet(0, "/foo"));
+  ASSERT_EQ(AbsPath(fs, "/foo/bar"),              PathRet(0, "/foo/bar"));
+  ASSERT_EQ(AbsPath(fs, "//."),                   PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "///////"),               PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "//././/.////.///.././"), PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "/../foo"),               PathRet(0, "/foo"));
+  ASSERT_EQ(AbsPath(fs, "/..foo/"),               PathRet(0, "/..foo"));
+  ASSERT_EQ(AbsPath(fs, "/.foo/"),                PathRet(0, "/.foo"));
+  ASSERT_EQ(AbsPath(fs, "/foo/../bar"),           PathRet(0, "/bar"));
+  ASSERT_EQ(AbsPath(fs, "/foo/.."),               PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "/../foo/.././bar/./"),   PathRet(0, "/bar"));
+  ASSERT_EQ(AbsPath(fs, "/bar/foo/.."),           PathRet(0, "/bar"));
+  ASSERT_EQ(AbsPath(fs, "/..foo/bar/.."),         PathRet(0, "/..foo"));
+  ASSERT_EQ(AbsPath(fs, "/foo/../bar/.."),        PathRet(0, "/"));
 }
-*/
+
+TEST_F(FilenameUtilTest, TestRealPath) {
+  // RealPath differs from AbsPath in that it also resolves symlinks.
+  MockFS fs;
+  fs.cwd = "/usr/var";
+  fs.symlinks["/tmp"] = "/var/tmp";
+  fs.symlinks["/var"] = "/usr/var";
+  fs.symlinks["/tmp/test"] = "NEVER_USED";
+  fs.symlinks["/usr/var/link_here"] = "here";
+  fs.symlinks["/usr/var/link_here2"] = "./here";
+  fs.symlinks["/usr/var/link_up"] = "../";
+  fs.symlinks["/usr/var/link_up_up"] = "../../hello";
+  fs.symlinks["/usr/var/link_abs"] = "/tmp/abs";
+  fs.symlinks["/usr/var/link_rel"] = "test/./rel///";
+
+  // Symlink-less tests.
+  ASSERT_EQ(RealPath(fs, "/foo/bar/baz"),         PathRet(0, "/foo/bar/baz"));
+  ASSERT_EQ(RealPath(fs, "foo/bar/baz"),          PathRet(0, "/usr/var/foo/bar/baz"));
+  ASSERT_EQ(RealPath(fs, "foo/..//./bar/./baz/"), PathRet(0, "/usr/var/bar/baz"));
+  ASSERT_EQ(RealPath(fs, ""),                     PathRet(0, "/usr/var"));
+  ASSERT_EQ(RealPath(fs, "///"),                  PathRet(0, "/"));
+  ASSERT_EQ(RealPath(fs, "."),                    PathRet(0, "/usr/var"));
+  ASSERT_EQ(RealPath(fs, ".."),                   PathRet(0, "/usr"));
+  ASSERT_EQ(RealPath(fs, "../"),                  PathRet(0, "/usr"));
+  ASSERT_EQ(RealPath(fs, "/.."),                  PathRet(0, "/"));
+  ASSERT_EQ(RealPath(fs, "../.."),                PathRet(0, "/"));
+  ASSERT_EQ(RealPath(fs, "../..//"),              PathRet(0, "/"));
+
+  ASSERT_EQ(RealPath(fs, "/tmp"),                 PathRet(0, "/usr/var/tmp"));
+  ASSERT_EQ(RealPath(fs, "/./tmp//./"),           PathRet(0, "/usr/var/tmp"));
+  ASSERT_EQ(RealPath(fs, "/var/tmp"),             PathRet(0, "/usr/var/tmp"));
+  ASSERT_EQ(RealPath(fs, "/usr/var/tmp"),         PathRet(0, "/usr/var/tmp"));
+
+  // Test handling of symlinks.
+  ASSERT_EQ(RealPath(fs, "/var/link_here"),       PathRet(0, "/usr/var/here"));
+  ASSERT_EQ(RealPath(fs, "/var/link_here//test"), PathRet(0, "/usr/var/here/test"));
+  ASSERT_EQ(RealPath(fs, "/var/link_here2/"),     PathRet(0, "/usr/var/here"));
+  ASSERT_EQ(RealPath(fs, "/var/link_up"),         PathRet(0, "/usr"));
+  ASSERT_EQ(RealPath(fs, "/var/link_up/test/"),   PathRet(0, "/usr/test"));
+  ASSERT_EQ(RealPath(fs, "/var/link_up_up"),      PathRet(0, "/hello"));
+  ASSERT_EQ(RealPath(fs, "/var/link_up_up/test/"),PathRet(0, "/hello/test"));
+  ASSERT_EQ(RealPath(fs, "/var/link_abs"),        PathRet(0, "/usr/var/tmp/abs"));
+  ASSERT_EQ(RealPath(fs, "/var/link_abs/test/"),  PathRet(0, "/usr/var/tmp/abs/test"));
+  ASSERT_EQ(RealPath(fs, "/var/link_rel"),        PathRet(0, "/usr/var/test/rel"));
+  ASSERT_EQ(RealPath(fs, "/var/link_rel/test/"),  PathRet(0, "/usr/var/test/rel/test"));
+
+  // Same tests, but relative to the current directory.
+  ASSERT_EQ(RealPath(fs, "link_here"),            PathRet(0, "/usr/var/here"));
+  ASSERT_EQ(RealPath(fs, "link_here//test"),      PathRet(0, "/usr/var/here/test"));
+  ASSERT_EQ(RealPath(fs, "link_here2/"),          PathRet(0, "/usr/var/here"));
+  ASSERT_EQ(RealPath(fs, "link_up"),              PathRet(0, "/usr"));
+  ASSERT_EQ(RealPath(fs, "link_up/test/"),        PathRet(0, "/usr/test"));
+  ASSERT_EQ(RealPath(fs, "link_up_up"),           PathRet(0, "/hello"));
+  ASSERT_EQ(RealPath(fs, "link_up_up/test/"),     PathRet(0, "/hello/test"));
+  ASSERT_EQ(RealPath(fs, "link_abs"),             PathRet(0, "/usr/var/tmp/abs"));
+  ASSERT_EQ(RealPath(fs, "link_abs/test/"),       PathRet(0, "/usr/var/tmp/abs/test"));
+  ASSERT_EQ(RealPath(fs, "link_rel"),             PathRet(0, "/usr/var/test/rel"));
+  ASSERT_EQ(RealPath(fs, "link_rel/test/"),       PathRet(0, "/usr/var/test/rel/test"));
+
+  // Test handling of nonexistent paths.
+  ASSERT_EQ(RealPath(fs, "/var/link_hereN"),      PathRet(0, "/usr/var/link_hereN"));
+  ASSERT_EQ(RealPath(fs, "/var/fooN/test"),       PathRet(0, "/usr/var/fooN/test"));
+  ASSERT_EQ(RealPath(fs, "/fooN/test"),           PathRet(0, "/fooN/test"));
+  ASSERT_EQ(RealPath(fs, "link_abs/N/"),          PathRet(0, "/usr/var/tmp/abs/N"));
+  ASSERT_EQ(RealPath(fs, "link_abs/N/bar"),       PathRet(0, "/usr/var/tmp/abs/N/bar"));
+
+  // Test handling of paths with errors.
+  ASSERT_EQ(RealPath(fs, "/var/link_hereX"),      PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(fs, "/var/fooX/test"),       PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(fs, "/fooX/test"),           PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(fs, "link_abs/X/"),          PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(fs, "link_abs/X/bar"),       PathRet(-NACL_ABI_EACCES, ""));
+
+  // The danger is in leaving /danger after the translation.
+  fs.symlinks["/danger"] = "/etc/password";
+  fs.symlinks["/dangerX"] = "/etc/password";
+  fs.symlinks["/foo/danger"] = "/etc/password";
+  fs.symlinks["/fooX/danger"] = "/etc/password";
+  ASSERT_EQ(RealPath(fs, "/danger"),              PathRet(0, "/etc/password"));
+  ASSERT_EQ(RealPath(fs, "/dangerX"),             PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(fs, "/foo/danger"),          PathRet(0, "/etc/password"));
+  ASSERT_EQ(RealPath(fs, "/fooX/danger"),         PathRet(-NACL_ABI_EACCES, ""));
+}
