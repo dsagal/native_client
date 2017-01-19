@@ -27,7 +27,7 @@ env = env.Clone()
 temp_dir_path = env.MakeTempDir(prefix='temp_dir')
 temp_file_path = env.MakeEmptyFile(prefix='temp_file', dir=temp_dir_path)
 temp_symlink_path = os.path.join(temp_dir_path, 'temp_symlink')
-os.symlink(temp_file_path, temp_symlink_path)
+os.symlink(os.path.basename(temp_file_path), temp_symlink_path)
 temp_sub_dir_path = env.MakeTempDir(prefix='temp_sub_dir', dir=temp_dir_path)
 temp_sub_dir_file_path = env.MakeEmptyFile(prefix='temp_sub_file',
                                            dir=temp_sub_dir_path)

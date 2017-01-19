@@ -54,10 +54,15 @@ namespace nacl_filename_util {
 class FS {
   public:
     virtual ~FS() {}
-    // These methods return 0 on success, else a negated NaCl errno.
+
+    // Returns 0 on success, else a negated NaCl errno.
     virtual int32_t Getcwd(std::string *path) const = 0;
-    virtual int32_t Readlink(const std::string &path,
-                             std::string *link_path) const = 0;
+
+    // Returns 0 on success, else a negated NaCl errno. Assumes that path is
+    // fully resolved and contains no symlinks. Therefore, it isn't safe to use
+    // except by RealPath().
+    virtual int32_t RawReadlink(const std::string &path,
+                                std::string *link_path) const = 0;
 };
 
 bool StartsWith(const std::string &str, const std::string &prefix);
@@ -92,10 +97,15 @@ int32_t AbsPath(const FS &fs, const std::string &path,
  *
  * @param[in] path The path to be resolved (in virtual FS).
  * @param[out] resolved_path The resulting absolute path (in virtual FS).
+ * @param[in] link_flag Control what to do if the full path is a symlink:
+ *      0 to resolve it, >0 to return the path to it, <0 to disallow it,
+ *      and return link_flag as the error code in that case.
  * @return 0 on success, else a negated NaCl errno.
  */
 int32_t RealPath(const FS &fs, const std::string &path,
-                 std::string *resolved_path);
+                 std::string *resolved_path,
+                 int32_t link_flag = 0);
+
 
 
 /**
@@ -137,8 +147,7 @@ class SandboxFS : public FS {
                            bool *is_writable) const;
 
     int32_t Getcwd(std::string *path) const;
-    int32_t Readlink(const std::string &path,
-                              std::string *link_path) const;
+    int32_t RawReadlink(const std::string &path, std::string *link_path) const;
 
   private:
     bool TranslatePathImpl(const std::string &src_path, std::string *dest_path,

@@ -46,7 +46,8 @@ int32_t NaClSysOpen(struct NaClAppThread  *natp,
     return -NACL_ABI_EACCES;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, req_writable);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname,
+                                  req_writable, 0);
   if (0 != retval)
     goto cleanup;
 
@@ -154,7 +155,8 @@ int32_t NaClSysStat(struct NaClAppThread  *natp,
     return -NACL_ABI_EACCES;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, false);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname,
+                                  false, 0);
   if (0 != retval)
     goto cleanup;
 
@@ -186,7 +188,8 @@ int32_t NaClSysMkdir(struct NaClAppThread *natp,
     goto cleanup;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, true);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname,
+                                  true, -NACL_ABI_EEXIST);
   if (0 != retval)
     goto cleanup;
 
@@ -206,7 +209,8 @@ int32_t NaClSysRmdir(struct NaClAppThread *natp,
     goto cleanup;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, true);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname,
+                                  true, -NACL_ABI_EEXIST);
   if (0 != retval)
     goto cleanup;
 
@@ -226,7 +230,8 @@ int32_t NaClSysChdir(struct NaClAppThread *natp,
     goto cleanup;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, false);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname,
+                                  false, 0);
   if (0 != retval)
     goto cleanup;
 
@@ -279,7 +284,7 @@ int32_t NaClSysUnlink(struct NaClAppThread *natp,
     goto cleanup;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, true);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, true, 1);
   if (0 != retval)
     goto cleanup;
 
@@ -300,7 +305,7 @@ int32_t NaClSysTruncate(struct NaClAppThread *natp,
   if (!NaClFileAccessEnabled())
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, true);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, true, 0);
   if (0 != retval)
     return retval;
 
@@ -329,7 +334,7 @@ int32_t NaClSysLstat(struct NaClAppThread  *natp,
     return -NACL_ABI_EACCES;
   }
 
-  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, false);
+  retval = CopyHostPathInFromUser(nap, path, sizeof path, pathname, false, 1);
   if (0 != retval)
     return retval;
 
@@ -359,11 +364,13 @@ int32_t NaClSysLink(struct NaClAppThread *natp,
   if (!NaClFileAccessEnabled())
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname, false);
+  retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname,
+                                  false, 0);
   if (0 != retval)
     return retval;
 
-  retval = CopyHostPathInFromUser(nap, newpath, sizeof newpath, newname, true);
+  retval = CopyHostPathInFromUser(nap, newpath, sizeof newpath, newname,
+                                  true, -NACL_ABI_EEXIST);
   if (0 != retval)
     return retval;
 
@@ -382,7 +389,8 @@ int32_t NaClSysRename(struct NaClAppThread *natp,
   if (!NaClFileAccessEnabled())
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname, true);
+  retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname,
+                                  true, 1);
   if (0 != retval)
     return retval;
 
@@ -401,7 +409,13 @@ int32_t NaClSysRename(struct NaClAppThread *natp,
     }
   }
 
-  retval = CopyHostPathInFromUser(nap, newpath, sizeof newpath, newname, true);
+  /*
+   * Trying to rename a file on top of a symlink should normally work (the
+   * symlink would get removed), but let's ban it to be on the safe side, just
+   * in case the symlink gets followed in some situations or on some host OS's.
+   */
+  retval = CopyHostPathInFromUser(nap, newpath, sizeof newpath, newname,
+                                  true, -NACL_ABI_EACCES);
   if (0 != retval)
     return retval;
 
@@ -423,11 +437,14 @@ int32_t NaClSysSymlink(struct NaClAppThread *natp,
   if (!NaClAclBypassChecks)
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname, false);
+  /* For -m option, translation is wrong, but we don't get to this code. */
+  retval = CopyHostPathInFromUser(nap, oldpath, sizeof oldpath, oldname,
+                                  false, -NACL_ABI_EACCES);
   if (0 != retval)
     return retval;
 
-  retval = CopyHostPathInFromUser(nap, newpath, sizeof newpath, newname, true);
+  retval = CopyHostPathInFromUser(nap, newpath, sizeof newpath, newname,
+                                  true, -NACL_ABI_EACCES);
   if (0 != retval)
     return retval;
 
@@ -444,7 +461,8 @@ int32_t NaClSysChmod(struct NaClAppThread *natp,
   if (!NaClFileAccessEnabled())
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path, true);
+  retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path,
+                                  true, 0);
   if (0 != retval)
     return retval;
 
@@ -468,7 +486,8 @@ int32_t NaClSysAccess(struct NaClAppThread *natp,
       && (amode & ~(NACL_ABI_R_OK | NACL_ABI_W_OK | NACL_ABI_X_OK)) != 0)
     return -NACL_ABI_EINVAL;
 
-  retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path, false);
+  retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path,
+                                  false, 0);
   if (0 != retval)
     return retval;
 
@@ -494,7 +513,8 @@ int32_t NaClSysReadlink(struct NaClAppThread *natp,
   if (!NaClFileAccessEnabled())
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path, false);
+  retval = CopyHostPathInFromUser(nap, pathname, sizeof pathname, path,
+                                  false, 1);
   if (0 != retval)
     return retval;
 
@@ -542,7 +562,8 @@ int32_t NaClSysUtimes(struct NaClAppThread *natp,
   if (!NaClFileAccessEnabled())
     return -NACL_ABI_EACCES;
 
-  retval = CopyHostPathInFromUser(nap, kern_path, sizeof kern_path, path, true);
+  retval = CopyHostPathInFromUser(nap, kern_path, sizeof kern_path, path,
+                                  true, 0);
   if (0 != retval)
     return retval;
 

@@ -128,7 +128,7 @@ string JoinComponents(const string &head, const string &tail) {
 
 /*
  * Removes and returns the part of path until the first slash, leaving path to
- * start with the character following the slash.
+ * start with first following non-slash character.
  */
 string RemoveFirstComponent(string *path) {
   size_t pos = path->find(SEP);
@@ -137,14 +137,14 @@ string RemoveFirstComponent(string *path) {
     path->swap(ret);
   } else {
     ret = path->substr(0, pos);
-    path->erase(0, pos + 1);
+    path->erase(0, path->find_first_not_of(SEP, pos));
   }
   return ret;
 }
 
 /*
  * Removes and returns the part of path after the last slash, leaving path to
- * end with the character preceding the slash.
+ * end with the last preceding non-slash character.
  */
 string RemoveLastComponent(string *path) {
   size_t pos = path->rfind(SEP);
@@ -153,7 +153,7 @@ string RemoveLastComponent(string *path) {
     path->swap(ret);
   } else {
     ret = path->substr(pos + 1);
-    path->erase(pos);
+    path->erase(path->find_last_not_of(SEP, pos) + 1);
   }
   return ret;
 }
@@ -163,7 +163,7 @@ string RemoveLastComponent(string *path) {
  * it follows symlinks.
  */
 int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
-                     bool resolve_links) {
+                     bool resolve_links, int32_t link_flag) {
   int32_t retval = 0;
 
   // The invariants below are:
@@ -198,8 +198,18 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
 
       if (resolve_links) {
         string link_path;
-        retval = fs.Readlink(done, &link_path);
+        retval = fs.RawReadlink(done, &link_path);
         if (retval == 0) {
+          if (rest.empty()) {
+            // If it is the last component, then act according to the link_flag.
+            if (link_flag < 0) {
+              return link_flag;
+            }
+            if (link_flag > 0) {
+              continue;
+            }
+          }
+
           // Protect against infinite links.
           if (++link_count > NACL_FILEUTIL_MAXSYMLINKS) {
             return -NACL_ABI_ELOOP;
@@ -213,9 +223,10 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
             }
           }
           rest = JoinComponents(link_path, rest);
-        } else if (retval == -NACL_ABI_EINVAL || retval == -NACL_ABI_ENOENT) {
+        } else if (retval == -NACL_ABI_EINVAL ||
+                   (retval == -NACL_ABI_ENOENT && rest.empty())) {
           // EINVAL is the common case when the file exists but isn't a symlink.
-          // ENOENT is a non-existent path.
+          // ENOENT is a non-existent path, OK for the last component only.
         } else {
           // Some actual error reading new_path. We fail here to ensure the
           // resulting path has no symlinks (it would be exploitable to leave a
@@ -230,13 +241,14 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
 }
 
 int32_t AbsPath(const FS &fs, const string &path, string *resolved_path) {
-  return nacl_filename_util::RealPathImpl(fs, path, resolved_path, false);
+  return nacl_filename_util::RealPathImpl(fs, path, resolved_path, false, false);
 }
 
-int32_t RealPath(const FS &fs, const string &path, string *resolved_path) {
-  return nacl_filename_util::RealPathImpl(fs, path, resolved_path, true);
+int32_t RealPath(const FS &fs, const string &path, string *resolved_path,
+                 int32_t link_flag) {
+  return nacl_filename_util::RealPathImpl(fs, path, resolved_path, true,
+                                          link_flag);
 }
-
 
 /*
  * Implements the FS interface for the host filesystem. This allow using a mock
@@ -254,7 +266,7 @@ class HostFS : public FS {
       return 0;
     }
 
-    int32_t Readlink(const std::string &path, std::string *link_path) const {
+    int32_t RawReadlink(const std::string &path, std::string *link_path) const {
       char buf[NACL_CONFIG_PATH_MAX] = "";
       int32_t retval = NaClHostDescReadlink(path.c_str(), buf, sizeof buf);
       if (retval < 0) {
@@ -341,12 +353,12 @@ int32_t SandboxFS::Getcwd(string *path) const {
   return 0;
 }
 
-int32_t SandboxFS::Readlink(const std::string &path, std::string *link_path) const {
+int32_t SandboxFS::RawReadlink(const std::string &path, std::string *link_path) const {
   string host_path;
   if (!TranslateToHost(path, &host_path, NULL)) {
     return -NACL_ABI_EACCES;
   }
-  return host_fs_.Readlink(host_path, link_path);
+  return host_fs_.RawReadlink(host_path, link_path);
 }
 
 // Global instance of host_fs.

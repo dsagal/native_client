@@ -135,9 +135,8 @@ int32_t NaClSandboxGetcwd(char *buf, size_t buf_size) {
 int32_t NaClSandboxChdir(const char *path) {
   if (sandbox_fs) {
     string host_path;
-    int32_t retval = sandbox_fs->TranslateToHost(path, &host_path, NULL);
-    if (retval != 0) {
-      return retval;
+    if (!sandbox_fs->TranslateToHost(path, &host_path, NULL)) {
+      return -NACL_ABI_EACCES;
     }
     return NaClHostDescChdir(host_path.c_str());
   } else if (NaClAclBypassChecks) {
@@ -151,7 +150,8 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
                                 char           *dest,
                                 size_t         dest_max_size,
                                 uint32_t       src,
-                                uint32_t       req_writable) {
+                                bool           req_writable,
+                                int32_t        link_flag) {
   /*
    * NaClCopyInFromUserZStr may (try to) get bytes that is outside the
    * app's address space and generate a fault.
@@ -178,7 +178,8 @@ uint32_t CopyHostPathInFromUser(struct NaClApp *nap,
   const string sandbox_path(dest);
   string resolved_path, host_path;
 
-  int32_t retval = RealPath(*sandbox_fs, sandbox_path, &resolved_path);
+  int32_t retval = RealPath(*sandbox_fs, sandbox_path, &resolved_path,
+                            link_flag);
   if (retval == 0) {
     bool is_writable = false;
     if (!sandbox_fs->TranslateToHost(resolved_path, &host_path, &is_writable) ||

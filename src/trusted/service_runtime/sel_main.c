@@ -740,7 +740,7 @@ int NaClSelLdrMain(int argc, char **argv) {
    * directory. This is required for safety, because we allow relative
    * pathnames.
    */
-  if (NaClMountsEnabled() && NaClSandboxChdir("/")) {
+  if (NaClMountsEnabled() && NaClSandboxChdir("/") != 0) {
     NaClLog(LOG_FATAL, "Could not change directory to root dir\n");
   }
 

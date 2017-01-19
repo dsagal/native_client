@@ -233,12 +233,16 @@ void test_symlink_access() {
   // Symlink is disabled
   ASSERT_EQ(symlink(g_temp_file_path, symlink_name), -1);
   ASSERT_EQ(errno, EACCES);
-  // Readlink is disabled
-  ASSERT_EQ(readlink(g_temp_symlink_path, link_dest, sizeof link_dest), -1);
-  ASSERT_EQ(errno, EACCES);
-  // Cannot open symlinks (even if they already exist)
-  ASSERT_EQ(open(g_temp_symlink_path, O_RDONLY), -1);
-  ASSERT_EQ(errno, EACCES);
+  // Readlink now works.
+  struct stat buf;
+  ASSERT_EQ(lstat(g_temp_symlink_path, &buf), 0);
+  ASSERT_EQ(readlink(g_temp_symlink_path, link_dest, sizeof link_dest),
+            strlen(g_temp_file_name));
+  ASSERT_EQ(0, strncmp(link_dest, g_temp_file_name, strlen(g_temp_file_name)));
+  // We now can open valid symlinks.
+  int fd = open(g_temp_symlink_path, O_RDONLY);
+  ASSERT_MSG(fd >= 0, "open(symlink) failed\n");
+  ASSERT_EQ(0, close(fd));
 
   passed("test_symlink_access", "all");
 }

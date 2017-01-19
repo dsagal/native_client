@@ -178,11 +178,11 @@ void assertRemoveFirstComponent(string path, string expectedHead, string expecte
 TEST_F(FilenameUtilTest, TestRemoveFirstComponent) {
   assertRemoveFirstComponent("abc",       "abc", "");
   assertRemoveFirstComponent("abc/def",   "abc", "def");
-  assertRemoveFirstComponent("abc//def",  "abc", "/def");
+  assertRemoveFirstComponent("abc//def",  "abc", "def");
   assertRemoveFirstComponent("a/b/c/d",   "a",   "b/c/d");
   assertRemoveFirstComponent("/abc/def",  "",    "abc/def");
-  assertRemoveFirstComponent("//abc/def", "",    "/abc/def");
-  assertRemoveFirstComponent("//",        "",    "/");
+  assertRemoveFirstComponent("//abc/def", "",    "abc/def");
+  assertRemoveFirstComponent("//",        "",    "");
   assertRemoveFirstComponent("/",         "",    "");
   assertRemoveFirstComponent("",          "",    "");
 }
@@ -197,12 +197,12 @@ void assertRemoveLastComponent(string path, string expectedHead, string expected
 TEST_F(FilenameUtilTest, TestRemoveLastComponent) {
   assertRemoveLastComponent("abc",       "",          "abc");
   assertRemoveLastComponent("abc/def",   "abc",       "def");
-  assertRemoveLastComponent("abc//def",  "abc/",      "def");
+  assertRemoveLastComponent("abc//def",  "abc",      "def");
   assertRemoveLastComponent("a/b/c/d",   "a/b/c",     "d");
   assertRemoveLastComponent("/abc/def",  "/abc",      "def");
   assertRemoveLastComponent("/abc/def/", "/abc/def",  "");
-  assertRemoveLastComponent("abc/def//", "abc/def/",  "");
-  assertRemoveLastComponent("//",        "/",         "");
+  assertRemoveLastComponent("abc/def//", "abc/def",  "");
+  assertRemoveLastComponent("//",        "",         "");
   assertRemoveLastComponent("/",         "",          "");
   assertRemoveLastComponent("",          "",          "");
 }
@@ -225,7 +225,7 @@ namespace {
         return 0;
       }
 
-      virtual int32_t Readlink(const string &path, string *link_path) const {
+      virtual int32_t RawReadlink(const string &path, string *link_path) const {
         if (path.find("N") != string::npos) {
           return -NACL_ABI_ENOENT;
         }
@@ -250,9 +250,9 @@ namespace {
     return PathRet(retval, result);
   }
 
-  PathRet RealPath(const FS &fs, string path) {
+  PathRet RealPath(const FS &fs, string path, int32_t link_flag = 0) {
     string result;
-    int32_t retval = nacl_filename_util::RealPath(fs, path, &result);
+    int32_t retval = nacl_filename_util::RealPath(fs, path, &result, link_flag);
     return PathRet(retval, result);
   }
 
@@ -349,6 +349,14 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   ASSERT_EQ(RealPath(fs, "/var/tmp"),             PathRet(0, "/usr/var/tmp"));
   ASSERT_EQ(RealPath(fs, "/usr/var/tmp"),         PathRet(0, "/usr/var/tmp"));
 
+  // Test handling of link_flag.
+  ASSERT_EQ(RealPath(fs, "/tmp", 0),              PathRet(0, "/usr/var/tmp"));
+  ASSERT_EQ(RealPath(fs, "/tmp", 1),              PathRet(0, "/tmp"));
+  ASSERT_EQ(RealPath(fs, "/tmp", -123),           PathRet(-123, ""));
+  ASSERT_EQ(RealPath(fs, "/tmp/a", 0),            PathRet(0, "/usr/var/tmp/a"));
+  ASSERT_EQ(RealPath(fs, "/tmp/a", 1),            PathRet(0, "/usr/var/tmp/a"));
+  ASSERT_EQ(RealPath(fs, "/tmp/a", -123),         PathRet(0, "/usr/var/tmp/a"));
+
   // Test handling of symlinks.
   ASSERT_EQ(RealPath(fs, "/var/link_here"),       PathRet(0, "/usr/var/here"));
   ASSERT_EQ(RealPath(fs, "/var/link_here//test"), PathRet(0, "/usr/var/here/test"));
@@ -377,10 +385,10 @@ TEST_F(FilenameUtilTest, TestRealPath) {
 
   // Test handling of nonexistent paths.
   ASSERT_EQ(RealPath(fs, "/var/link_hereN"),      PathRet(0, "/usr/var/link_hereN"));
-  ASSERT_EQ(RealPath(fs, "/var/fooN/test"),       PathRet(0, "/usr/var/fooN/test"));
-  ASSERT_EQ(RealPath(fs, "/fooN/test"),           PathRet(0, "/fooN/test"));
+  ASSERT_EQ(RealPath(fs, "/var/fooN/test"),       PathRet(-NACL_ABI_ENOENT, ""));
+  ASSERT_EQ(RealPath(fs, "/fooN/test"),           PathRet(-NACL_ABI_ENOENT, ""));
   ASSERT_EQ(RealPath(fs, "link_abs/N/"),          PathRet(0, "/usr/var/tmp/abs/N"));
-  ASSERT_EQ(RealPath(fs, "link_abs/N/bar"),       PathRet(0, "/usr/var/tmp/abs/N/bar"));
+  ASSERT_EQ(RealPath(fs, "link_abs/N/bar"),       PathRet(-NACL_ABI_ENOENT, ""));
 
   // Test handling of paths with errors.
   ASSERT_EQ(RealPath(fs, "/var/link_hereX"),      PathRet(-NACL_ABI_EACCES, ""));

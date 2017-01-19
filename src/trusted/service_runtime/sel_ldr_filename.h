@@ -79,11 +79,14 @@ int32_t NaClSandboxChdir(const char *path);
  * @param[in] dest_max_size The size of the dest buffer.
  * @param[in] src A pointer to user's path buffer.
  * @param[in] req_writable If non-zero, require dest to be on a writable mount.
+ * @param[in] link_flag When path translation is done, a value of 0 resolves
+ *      the final symlink. A positive value resolves the path until the final
+ *      symlink. A negative value is an error to return if the path is a symlink.
  * @return 0 on success, else a negated NaCl errno.
  */
 uint32_t CopyHostPathInFromUser(struct NaClApp *nap, char *dest,
                                 size_t dest_max_size, uint32_t src,
-                                uint32_t req_writable);
+                                bool req_writable, int32_t link_flag);
 
 
 EXTERN_C_END
