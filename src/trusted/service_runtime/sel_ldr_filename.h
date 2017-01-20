@@ -86,7 +86,7 @@ int32_t NaClSandboxChdir(const char *path);
  */
 uint32_t CopyHostPathInFromUser(struct NaClApp *nap, char *dest,
                                 size_t dest_max_size, uint32_t src,
-                                bool req_writable, int32_t link_flag);
+                                int32_t req_writable, int32_t link_flag);
 
 
 EXTERN_C_END
