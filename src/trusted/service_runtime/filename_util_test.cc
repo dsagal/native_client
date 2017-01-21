@@ -296,6 +296,16 @@ TEST_F(FilenameUtilTest, TestAbsPath) {
   fs.symlinks["/foo"] = "/hello";
   ASSERT_EQ(AbsPath(fs, "/foo/bar/baz/"),         PathRet(0, "/foo/bar/baz"));
 
+  // Test handling of backslashes.
+  ASSERT_EQ(AbsPath(fs, "foo\\..//./bar/.\\baz/"),  PathRet(0, "/hello/world/bar/baz"));
+  ASSERT_EQ(AbsPath(fs, "../..\\/"),                PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "..\\..\\/"),               PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "\\\\\\"),                  PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "..\\"),                    PathRet(0, "/hello"));
+  ASSERT_EQ(AbsPath(fs, "\\.."),                    PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "/var/\\..\\..\\..\\"),     PathRet(0, "/"));
+  ASSERT_EQ(AbsPath(fs, "/foo\\bar/baz\\"),         PathRet(0, "/foo/bar/baz"));
+
   // Test cases from earlier tests for CheckCanonical.
   ASSERT_EQ(AbsPath(fs, "/foo"),                  PathRet(0, "/foo"));
   ASSERT_EQ(AbsPath(fs, "/foo/"),                 PathRet(0, "/foo"));
@@ -406,12 +416,24 @@ TEST_F(FilenameUtilTest, TestRealPath) {
   ASSERT_EQ(RealPath(fs, "/dangerX"),             PathRet(-NACL_ABI_EACCES, ""));
   ASSERT_EQ(RealPath(fs, "/foo/danger"),          PathRet(0, "/etc/password"));
   ASSERT_EQ(RealPath(fs, "/fooX/danger"),         PathRet(-NACL_ABI_EACCES, ""));
+
+  // Test handling of backslashes.
+  ASSERT_EQ(RealPath(fs, "foo\\..//./bar/.\\baz/"), PathRet(0, "/usr/var/bar/baz"));
+  ASSERT_EQ(RealPath(fs, "\\foo\\danger"),          PathRet(0, "/etc/password"));
+  ASSERT_EQ(RealPath(fs, "/fooX\\danger"),          PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(RealPath(fs, "\\.\\tmp\\\\.\\"),        PathRet(0, "/usr/var/tmp"));
+  ASSERT_EQ(RealPath(fs, "\\tmp", 0),               PathRet(0, "/usr/var/tmp"));
+  ASSERT_EQ(RealPath(fs, "\\tmp", 1),               PathRet(0, "/tmp"));
+  ASSERT_EQ(RealPath(fs, "\\tmp", -123),            PathRet(-123, ""));
+  ASSERT_EQ(RealPath(fs, "\\tmp", -123),            PathRet(-123, ""));
+  ASSERT_EQ(RealPath(fs, "/var/\\..\\..\\..\\"),    PathRet(0, "/"));
 }
 
 
 namespace {
   using nacl_filename_util::SandboxFS;
 
+  // The fields are: (is_success, translated_path, is_writable)
   typedef testing::tuple<bool, string, bool> TransRet;
 
   TransRet ToHost(SandboxFS &sfs, string path) {
@@ -426,6 +448,13 @@ namespace {
     string dest;
     bool retval = sfs.TranslateFromHost(path, &dest, &is_writable);
     return TransRet(retval, dest, is_writable);
+  }
+
+  PathRet Resolve(SandboxFS &sfs, string path,
+                  bool req_writable=false, int32_t link_flag=0) {
+    string host;
+    int32_t retval = sfs.ResolveToHost(path, &host, req_writable, link_flag);
+    return PathRet(retval, host);
   }
 }
 
@@ -466,7 +495,6 @@ TEST_F(FilenameUtilTest, TestSandboxFSTranslate) {
   // Test order of matching and the "is_writable" flag.
   sfs.AddMount("/ROOT/",  "/",        false);
   sfs.AddMount("/READ",   "/tmp/ro",  false);
-
   ASSERT_EQ(ToHost(sfs, ""),            TransRet(0, "", false));
   ASSERT_EQ(ToHost(sfs, "/"),           TransRet(1, "/ROOT/", false));
   ASSERT_EQ(ToHost(sfs, "/foo"),        TransRet(1, "/ROOT/foo", false));
@@ -476,9 +504,24 @@ TEST_F(FilenameUtilTest, TestSandboxFSTranslate) {
   ASSERT_EQ(ToHost(sfs, "/tmp/ro"),     TransRet(1, "/READ", false));
   ASSERT_EQ(ToHost(sfs, "/tmp/ro/"),    TransRet(1, "/READ/", false));
   ASSERT_EQ(ToHost(sfs, "/tmp/ro/foo"), TransRet(1, "/READ/foo", false));
+
+  // Test handling of backslashes.
+  sfs.AddMount("C:\\ROOT", "/croot", false);
+  ASSERT_EQ(FromHost(sfs, "\\HOST\\TMP"), TransRet(1, "/tmp", true));
+  ASSERT_EQ(FromHost(sfs, "\\HOST\\TMP\\"), TransRet(1, "/tmp/", true));
+  ASSERT_EQ(FromHost(sfs, "C:\\ROOT"), TransRet(1, "/croot", false));
+  ASSERT_EQ(FromHost(sfs, "C:\\ROOT\\"), TransRet(1, "/croot/", false));
+  ASSERT_EQ(FromHost(sfs, "C:\\ROOT\\TMP\\"), TransRet(1, "/croot/TMP/", false));
+  ASSERT_EQ(FromHost(sfs, "\\ROOT\\"), TransRet(1, "/", false));
+  ASSERT_EQ(FromHost(sfs, "C:\\"), TransRet(0, "", false));
+  ASSERT_EQ(FromHost(sfs, "C:/ROOT"), TransRet(1, "/croot", false));
+  ASSERT_EQ(FromHost(sfs, "C:/ROOT/"), TransRet(1, "/croot/", false));
+  ASSERT_EQ(FromHost(sfs, "C:/ROOT\\TMP/"), TransRet(1, "/croot/TMP/", false));
+  ASSERT_EQ(FromHost(sfs, "/ROOT/"), TransRet(1, "/", false));
+  ASSERT_EQ(FromHost(sfs, "C:/"), TransRet(0, "", false));
 }
 
-TEST_F(FilenameUtilTest, TestSandboxFSResolve) {
+TEST_F(FilenameUtilTest, TestSandboxFSRealPath) {
   // Test symlinks and cwd, to ensure they are interpreted with SandboxFS.
   using nacl_filename_util::SandboxFS;
 
@@ -525,6 +568,10 @@ TEST_F(FilenameUtilTest, TestSandboxFSResolve) {
   ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/ro"));
   host_fs.cwd = "/READ/foo";
   ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/ro/foo"));
+  host_fs.cwd = "\\HOST\\TMP\\foo";
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/foo"));
+  host_fs.cwd = "\\READ\\foo";
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/tmp/ro/foo"));
 
   host_fs.symlinks["/ROOT/private1"] = "./access";
   host_fs.symlinks["/ROOT/private2"] = "./noaccessX";
@@ -536,4 +583,80 @@ TEST_F(FilenameUtilTest, TestSandboxFSResolve) {
   ASSERT_EQ(RealPath(sfs, "./private2/foo"), PathRet(-NACL_ABI_EACCES, ""));
   ASSERT_EQ(RealPath(sfs, "./privateX"),     PathRet(-NACL_ABI_EACCES, ""));
   ASSERT_EQ(RealPath(sfs, "./privateX/foo"), PathRet(-NACL_ABI_EACCES, ""));
+}
+
+
+TEST_F(FilenameUtilTest, TestSandboxFSResolveToHost) {
+  // Test full resolving of sandbox path to a host path.
+  using nacl_filename_util::SandboxFS;
+
+  MockFS host_fs;
+  host_fs.cwd = "/ROOT";
+
+  SandboxFS sfs(host_fs);
+  sfs.AddMount("/HOST/TMP", "/tmp", true);
+  sfs.AddMount("/ROOT",  "/",        false);
+  sfs.AddMount("C:\\READ\\",   "/tmp/ro",  false);
+
+  host_fs.symlinks["/HOST/TMP/danger"] = "/etc/password";
+  host_fs.symlinks["/HOST/TMP/up"] = "..";
+  host_fs.symlinks["/HOST/TMP/up2"] = "../../";
+  host_fs.symlinks["/HOST/TMP/root"] = "/ROOT";
+  host_fs.symlinks["/HOST/TMP/root2"] = "../../ROOT///././";
+  host_fs.symlinks["C:/READ/ltmp"] = "/tmp/foo";
+  host_fs.symlinks["C:/READ/ltmp2"] = "/tmp/foo/../bar//foo";
+
+  ASSERT_EQ(Getcwd(sfs), PathRet(0, "/"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/danger"),     PathRet(0, "/ROOT/etc/password"));
+  ASSERT_EQ(Resolve(sfs, "/etc/password"),   PathRet(0, "/ROOT/etc/password"));
+  ASSERT_EQ(Resolve(sfs, "../etc/password"), PathRet(0, "/ROOT/etc/password"));
+  ASSERT_EQ(Resolve(sfs, ".././.././/"),     PathRet(0, "/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "..\\.\\..\\.\\\\"),PathRet(0, "/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up"),         PathRet(0, "/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up\\"),       PathRet(0, "/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up/x"),       PathRet(0, "/ROOT/x"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2"),        PathRet(0, "/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2/x"),      PathRet(0, "/ROOT/x"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/root"),       PathRet(0, "/ROOT/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/root/x"),     PathRet(0, "/ROOT/ROOT/x"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/root2"),      PathRet(0, "/ROOT/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/root2/x"),    PathRet(0, "/ROOT/ROOT/x"));
+  ASSERT_EQ(Resolve(sfs, "../tmp/ro/ltmp"),  PathRet(0, "/HOST/TMP/foo"));
+  ASSERT_EQ(Resolve(sfs, ".//tmp/ro/ltmp2"), PathRet(0, "/HOST/TMP/bar/foo"));
+  ASSERT_EQ(Resolve(sfs, "..\\tmp/ro/ltmp"),  PathRet(0, "/HOST/TMP/foo"));
+  ASSERT_EQ(Resolve(sfs, ".\\\\tmp/ro/ltmp2"), PathRet(0, "/HOST/TMP/bar/foo"));
+  ASSERT_EQ(Resolve(sfs, ".\\\\tmp/ro/foo"), PathRet(0, "C:/READ/foo"));
+
+  // Test symlinks involving no-access paths.
+  host_fs.symlinks["/ROOT/private1"] = "./access";
+  host_fs.symlinks["/ROOT/private2"] = "./noaccessX";
+  host_fs.symlinks["/ROOT/privateX"] = "/etc/password";
+  host_fs.cwd = "/ROOT";
+  ASSERT_EQ(Resolve(sfs, "./private1"),     PathRet(0, "/ROOT/access"));
+  ASSERT_EQ(Resolve(sfs, "./private1/foo"), PathRet(0, "/ROOT/access/foo"));
+  ASSERT_EQ(Resolve(sfs, "./private2"),     PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(Resolve(sfs, "./private2/foo"), PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(Resolve(sfs, "./privateX"),     PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(Resolve(sfs, "./privateX/foo"), PathRet(-NACL_ABI_EACCES, ""));
+
+  // Test is_writable parameter.
+  ASSERT_EQ(Resolve(sfs, "/tmp/foo", true), PathRet(0, "/HOST/TMP/foo"));
+  ASSERT_EQ(Resolve(sfs, "/foo/tmp", true), PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(Resolve(sfs, "\\tmp\\foo", true), PathRet(0, "/HOST/TMP/foo"));
+  ASSERT_EQ(Resolve(sfs, "\\foo\\tmp", true), PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(Resolve(sfs, "/tmp/foo\\..\\ro", false), PathRet(0, "C:/READ/"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/foo\\..\\ro", true), PathRet(-NACL_ABI_EACCES, ""));
+
+  // Test link_flag parameter.
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2", false, 0), PathRet(0, "/ROOT"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2", true, 0),  PathRet(-NACL_ABI_EACCES, ""));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2", false, 1), PathRet(0, "/HOST/TMP/up2"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2", true, 1),  PathRet(0, "/HOST/TMP/up2"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2", false, -123), PathRet(-123, ""));
+  ASSERT_EQ(Resolve(sfs, "/tmp/up2", true, -123),  PathRet(-123, ""));
+
+  // Link_flag parameter doesn't matter for non-links.
+  ASSERT_EQ(Resolve(sfs, "/tmp/foo", true, 0),    PathRet(0, "/HOST/TMP/foo"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/foo", true, 1),    PathRet(0, "/HOST/TMP/foo"));
+  ASSERT_EQ(Resolve(sfs, "/tmp/foo", true, -123), PathRet(0, "/HOST/TMP/foo"));
 }

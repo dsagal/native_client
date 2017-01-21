@@ -38,32 +38,35 @@ int NaClMountsEnabled();
 
 
 /*
- * Translates a path between host and virtual filesystems. The direction is
- * determined by the to_host flag.
+ * Converts a sandbox path into a host path. Depending on -a/-m options, it may
+ * resolving all symbolic links, extra "/" characters, and references to /./
+ * and /../. It produces a host path for use with underlying host filesystem
+ * functions. It verifies that the options allow access to the path.
  *
- * @param[in] src_path The source path (virtual if to_host is set, else host).
- * @param[out] dest_path The output path (host if to_host is set, else virtual).
- * @param[in] dest_max_size The size of dest_path buffer.
- * @param[in] to_host Non-zero to translate virtual to host, 0 for backwards.
+ * @param[in] src The path to be resolved (as seen in the sandbox). It is OK
+ *      for src and dest to point to the same buffer.
+ * @param[out] dest Buffer to contain the resulting host path. Will be set to
+ *      the empty string on error.
+ * @param[in] dest_max_size The size of the dest buffer.
+ * @param[in] req_writable If non-zero, path must be on a writable mount.
+ * @param[in] link_flag Control what to do if the full path is a symlink:
+ *      0 to resolve fully, >0 to resolve the path leading up to it, <0 to
+ *      disallow it, and return link_flag as the error code in that case.
  * @return 0 on success, else a negated NaCl errno.
  */
-uint32_t NaClMountPathTranslate(const char *src_path, char *dest_path,
-                                size_t dest_max_size, int to_host);
-
-
-/*
- * Fills in the current working directory as a sandbox path.
- * Changes working directory to the given sandbox path.
- */
-int32_t NaClSandboxGetcwd(char *buf, size_t buf_size);
-
+int32_t NaClPathToHost(const char *src, char *dest, size_t dest_max_size,
+                       int32_t req_writable, int32_t link_flag);
 
 /*
- * Changes working directory to the given sandbox path.
- * @return 0 on success, else a negated NaCl errno.
+ * Converts a host path into a sandbox path. It is the inverse of
+ * NaClPathFromHost. It verifies that the host path is mapped to the sandbox,
+ * returning -NACL_ABI_EACCES otherwise.
+ *
+ * @param[in] src The host path to be converted. May overlap with dest.
+ * @param[out] dest Buffer to contain the resulting sandbox path.
+ * @param[in] dest_max_size The size of the dest buffer.
  */
-int32_t NaClSandboxChdir(const char *path);
-
+int32_t NaClPathFromHost(const char *src, char *dest, size_t dest_max_size);
 
 /*
  * Given a file path at |src| from the user, copy the path into a buffer |dest|.

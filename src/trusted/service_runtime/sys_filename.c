@@ -257,7 +257,11 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
     return -NACL_ABI_EINVAL;
   }
 
-  retval = NaClSandboxGetcwd(path, NACL_CONFIG_PATH_MAX);
+  retval = NaClHostDescGetcwd(path, sizeof path);
+  if (retval != 0) {
+    return retval;
+  }
+  retval = NaClPathFromHost(path, path, sizeof path);
   if (retval != 0) {
     return retval;
   }

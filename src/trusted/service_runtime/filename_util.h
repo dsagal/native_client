@@ -127,9 +127,9 @@ class SandboxFS : public FS {
     }
 
     /*
-     * Adds a mount point.
+     * Adds a mount point. Returns false on error.
      */
-    void AddMount(std::string host_path, std::string virt_path,
+    bool AddMount(std::string host_path, std::string virt_path,
                   bool is_writable);
 
     /*
@@ -143,13 +143,29 @@ class SandboxFS : public FS {
      * Translates a host path to a sandbox path, filling in *is_writable flag
      * (when not NULL). Returns true on success, false if there is no mapping.
      */
-    bool TranslateFromHost(const std::string &host_path, std::string *virt_path,
+    bool TranslateFromHost(std::string host_path, std::string *virt_path,
                            bool *is_writable) const;
 
+    /*
+     * Converts a sandbox path into a host path, resolving all symbolic links,
+     * extra "/" characters, and references to /./ and /../. It produces a host
+     * path for use with underlying host filesystem functions.
+     *
+     * @param[in] virt_path The path to be resolved (as seen in the sandbox).
+     * @param[out] host_path The resulting host path.
+     * @param[in] req_writable If non-zero, path must be on a writable mount.
+     * @param[in] link_flag Control what to do if the full path is a symlink:
+     *      0 to resolve fully, >0 to resolve the path leading up to it, <0 to
+     *      disallow it, and return link_flag as the error code in that case.
+     * @return 0 on success, else a negated NaCl errno.
+     */
+    int32_t ResolveToHost(const std::string &virt_path, std::string *host_path,
+                          bool req_writable, int32_t link_flag) const;
+
+  private:
     int32_t Getcwd(std::string *path) const;
     int32_t RawReadlink(const std::string &path, std::string *link_path) const;
 
-  private:
     bool TranslatePathImpl(const std::string &src_path, std::string *dest_path,
                            bool to_host, bool *writable) const;
 

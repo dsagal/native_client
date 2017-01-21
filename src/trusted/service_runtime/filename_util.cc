@@ -5,8 +5,10 @@
  */
 
 #include "native_client/src/shared/platform/nacl_host_desc.h"
+#include "native_client/src/shared/platform/nacl_log.h"
 #include "native_client/src/trusted/service_runtime/filename_util.h"
 #include "native_client/src/trusted/service_runtime/include/sys/errno.h"
+#include "native_client/src/trusted/service_runtime/nacl_config.h"
 #include "native_client/src/trusted/service_runtime/nacl_config.h"
 
 #include <string>
@@ -29,6 +31,26 @@ namespace nacl_filename_util {
 char SEP = '/';
 string CURDIR = ".";
 string PARDIR = "..";
+
+
+/*
+ * We use forward slash as separator in the sandbox filesystem (code running
+ * there shouldn't care what OS the host is). We always translate backslashes
+ * to forward slashes, so that we don't have to worry about both in most of the
+ * code.
+ *
+ * Note that because we translate paths to the host filesystem, which may be
+ * backslash-using Windows, it's important to resolve all backslashes, or else
+ * a path including "\\..\\" or similar can be used to circumvent the mounts
+ * specified with -m.
+ *
+ * For simplicity we always translate all paths to have forward slashes.
+ * Windows accepts both kinds.
+ */
+void ReplaceSlashes(string *path) {
+  std::replace(path->begin(), path->end(), '\\', '/');
+}
+
 
 /*
  * Returns true if str begins with prefix.
@@ -171,6 +193,7 @@ int32_t RealPathImpl(const FS &fs, const string &path, string *resolved_path,
   //   very last one (i.e. full path).
   // - rest is relative to done (even if it starts with a slash).
   string done, rest = path;
+  ReplaceSlashes(&rest);
   size_t link_count = 0;
 
   // Ensure that we start with an absolute path (i.e. add cwd if relative).
@@ -287,10 +310,25 @@ class HostFS : public FS {
 };
 
 
-void SandboxFS::AddMount(string host_path, string virt_path, bool is_writable) {
+bool SandboxFS::AddMount(string host_path, string virt_path, bool is_writable) {
+  ReplaceSlashes(&host_path);
+  ReplaceSlashes(&virt_path);
+
+  if (!IsAbsolute(virt_path)) {
+    NaClLog(LOG_ERROR, "NaClAddMount: -m mount path must be absolute\n");
+    return false;
+  }
+
+  // Calling AbsPath() normalizes the path, ensuring it contains no . .. or //.
+  string abs_virt_path;
+  if (AbsPath(*this, virt_path, &abs_virt_path) != 0) {
+    NaClLog(LOG_ERROR, "NaClAddMount: error normalizing -m mount path\n");
+    return false;
+  }
+
   VirtualMount mount;
   mount.host_path = host_path;
-  mount.virt_path = virt_path;
+  mount.virt_path = abs_virt_path;
   mount.is_writable = is_writable;
 
   // Find the insert position, sorted by decreasing length of virt_path.
@@ -301,6 +339,7 @@ void SandboxFS::AddMount(string host_path, string virt_path, bool is_writable) {
     }
   }
   virtual_mounts_.insert(it, mount);
+  return true;
 }
 
 /*
@@ -336,9 +375,26 @@ bool SandboxFS::TranslateToHost(const string &virt_path, string *host_path,
   return TranslatePathImpl(virt_path, host_path, true, is_writable);
 }
 
-bool SandboxFS::TranslateFromHost(const string &host_path, string *virt_path,
+bool SandboxFS::TranslateFromHost(string host_path, string *virt_path,
                        bool *is_writable) const {
+  ReplaceSlashes(&host_path);
   return TranslatePathImpl(host_path, virt_path, false, is_writable);
+}
+
+int32_t SandboxFS::ResolveToHost(const string &virt_path, string *host_path,
+                                 bool req_writable, int32_t link_flag) const {
+  string resolved_path;
+  int32_t retval = RealPath(*this, virt_path, &resolved_path, link_flag);
+  if (retval != 0) {
+    return retval;
+  }
+  bool is_writable = false;
+  if (!TranslateToHost(resolved_path, host_path, &is_writable) ||
+      (req_writable && !is_writable)) {
+    host_path->clear();     // Don't leave an unsafe path.
+    return -NACL_ABI_EACCES;
+  }
+  return 0;
 }
 
 int32_t SandboxFS::Getcwd(string *path) const {
