@@ -8,7 +8,7 @@ import os
 Import('env')
 
 # The "-m" flag is not supported on Windows.
-if env.Bit('host_windows') or env.Bit('nacl_glibc'):
+if env.Bit('nacl_glibc'):
   Return()
 
 env = env.Clone()
@@ -27,7 +27,12 @@ env = env.Clone()
 temp_dir_path = env.MakeTempDir(prefix='temp_dir')
 temp_file_path = env.MakeEmptyFile(prefix='temp_file', dir=temp_dir_path)
 temp_symlink_path = os.path.join(temp_dir_path, 'temp_symlink')
-os.symlink(os.path.basename(temp_file_path), temp_symlink_path)
+if not env.Bit('host_windows'):
+  os.symlink(os.path.basename(temp_file_path), temp_symlink_path)
+else:
+  # No symlinks on Windows; instead just create an empty file.
+  open(temp_symlink_path, "w").close()
+
 temp_sub_dir_path = env.MakeTempDir(prefix='temp_sub_dir', dir=temp_dir_path)
 temp_sub_dir_file_path = env.MakeEmptyFile(prefix='temp_sub_file',
                                            dir=temp_sub_dir_path)
@@ -47,10 +52,11 @@ limited_file_access_nexe = env.ComponentProgram('limited_file_access',
                                                 EXTRA_LIBS=['${PTHREAD_LIBS}',
                                                             '${NONIRT_LIBS}'])
 
+env_flags = ['-E', 'IS_WINDOWS=1'] if env.Bit('host_windows') else []
 node = env.CommandSelLdrTestNacl(
     'limited_file_access_test.out',
     limited_file_access_nexe,
     args=temp_directory_files,
-    sel_ldr_flags=['-m', mounted_directory])
+    sel_ldr_flags=env_flags + ['-m', mounted_directory + ":/:rw"])
 
 env.AddNodeToTestSuite(node, ['small_tests'], 'run_limited_file_access_test')

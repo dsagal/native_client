@@ -407,8 +407,8 @@ int32_t NaClSysRename(struct NaClAppThread *natp,
     if (0 != retval) {
       return retval;
     }
-    if ((stbuf.st_mode & S_IFMT) == S_IFDIR ||
-        (stbuf.st_mode & S_IFMT) == S_IFLNK) {
+    if (NACL_ABI_S_ISDIR(stbuf.st_mode) ||
+        NACL_ABI_S_ISLNK(stbuf.st_mode)) {
       return -NACL_ABI_EACCES;
     }
   }

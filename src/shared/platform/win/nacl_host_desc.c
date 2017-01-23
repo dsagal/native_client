@@ -1530,7 +1530,8 @@ int NaClHostDescReadlink(const char *path, char *buf, size_t bufsize) {
   /*
    * readlink(2) sets errno to EINVAL when the file in question is
    * not a symlink.  Since win32 does not support symlinks we simply
-   * return EINVAL in all cases here.
+   * return EINVAL, except that we check first that stat() doesn't produce a
+   * different error code (e.g. to distinguish between ENOENT and EINVAL).
    *
    * Partial implementation exists here:
    * https://chromiumcodereview.appspot.com/24889002/
@@ -1539,6 +1540,11 @@ int NaClHostDescReadlink(const char *path, char *buf, size_t bufsize) {
    */
   NaClLog(1,
           "NaClHostDescReadlink: symbolic links not supported on Windows.\n");
+  nacl_host_stat_t nhst_buf;
+  int retval = NaClHostDescStat(path, &nhst_buf);
+  if (retval != 0) {
+    return retval;
+  }
   return -NACL_ABI_EINVAL;
 }
 
