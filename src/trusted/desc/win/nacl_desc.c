@@ -50,6 +50,12 @@ int32_t NaClAbiStatHostDescStatXlateCtor(struct nacl_abi_stat   *dst,
     case S_IFDIR:
       m = NACL_ABI_S_IFDIR;
       break;
+    case _S_IFIFO:
+      /* Only available with leading underscore.
+       * Occurs in practice with redirected IO descriptors.
+       */
+      m = NACL_ABI_S_IFIFO;
+      break;
     case S_IFCHR:
       /* stdin/out/err can be inherited, so this is okay */
       m = NACL_ABI_S_IFCHR;

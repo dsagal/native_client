@@ -1538,7 +1538,7 @@ int NaClHostDescReadlink(const char *path, char *buf, size_t bufsize) {
    * TODO(phosek/smklein): Complete the partial implementation of readlink
    * if basic symlink support arrives on nacl for windows.
    */
-  NaClLog(1,
+  NaClLog(2,
           "NaClHostDescReadlink: symbolic links not supported on Windows.\n");
   nacl_host_stat_t nhst_buf;
   int retval = NaClHostDescStat(path, &nhst_buf);
