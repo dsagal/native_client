@@ -34,7 +34,7 @@ int NaClAddMount(const char *mount_spec);
  * Returns 1 if virtual filesystem mounts have been set up (enabling filesystem
  * access), 0 otherwise.
  */
-int NaClMountsEnabled();
+int NaClMountsEnabled(void);
 
 
 /*

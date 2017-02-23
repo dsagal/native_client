@@ -98,7 +98,7 @@ int NaClAddMount(const char *mount_spec) {
 }
 
 
-int NaClMountsEnabled() {
+int NaClMountsEnabled(void) {
   return sandbox_fs->Enabled() ? 1 : 0;
 }
 

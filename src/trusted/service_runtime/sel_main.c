@@ -28,6 +28,7 @@
 #include "native_client/src/shared/platform/nacl_log.h"
 #include "native_client/src/shared/platform/nacl_sync.h"
 #include "native_client/src/shared/platform/nacl_sync_checked.h"
+#include "native_client/src/shared/utils/types.h"
 
 #include "native_client/src/trusted/desc/nacl_desc_base.h"
 #include "native_client/src/trusted/desc/nacl_desc_io.h"
@@ -504,7 +505,7 @@ static int ProcessMounts(struct MountSpec *list) {
 /*
  * Change to the sandbox's root directory.
  */
-static int32_t ChdirRoot() {
+static int32_t ChdirRoot(void) {
   char host_path[NACL_CONFIG_PATH_MAX] = "";
   int32_t retval = NaClPathToHost("/", host_path, sizeof(host_path), FALSE, 0);
   if (retval != 0) {

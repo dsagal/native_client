@@ -12,6 +12,7 @@
 #include "native_client/src/shared/platform/nacl_check.h"
 #include "native_client/src/shared/platform/nacl_host_desc.h"
 #include "native_client/src/shared/platform/nacl_host_dir.h"
+#include "native_client/src/shared/utils/types.h"
 #include "native_client/src/trusted/desc/nacl_desc_dir.h"
 #include "native_client/src/trusted/desc/nacl_desc_io.h"
 #include "native_client/src/trusted/service_runtime/include/sys/errno.h"
@@ -248,6 +249,7 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
   struct NaClApp *nap = natp->nap;
   int32_t        retval = -NACL_ABI_EINVAL;
   char           path[NACL_CONFIG_PATH_MAX];
+  size_t         path_len;
 
   if (!NaClFileAccessEnabled()) {
     return -NACL_ABI_EACCES;
@@ -266,7 +268,7 @@ int32_t NaClSysGetcwd(struct NaClAppThread *natp,
     return retval;
   }
 
-  size_t path_len = strlen(path);
+  path_len = strlen(path);
   if (path_len + 1 > (size_t)len) {
     return -NACL_ABI_ERANGE;
   }
